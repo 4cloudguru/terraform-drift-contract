@@ -13,5 +13,6 @@ export {
   type ResourceChange,
   type SummaryEntry,
   type AttrChange,
+  type ModuleCallProvenance,
   type Result,
 } from './summarize'

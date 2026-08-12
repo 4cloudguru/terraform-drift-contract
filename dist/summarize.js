@@ -18,6 +18,12 @@
 //
 // terraform -json does NOT mask sensitive values (only human output does), so
 // masking happens here, BEFORE fmt(), so secrets never reach the formatter.
+//
+// DELIBERATE DIVERGENCE (see README "Contract divergences"): an attribute is
+// masked when EITHER side marks it sensitive. drift_summary.py and the Go
+// driftingest still mask each side against its own mirror, so for an
+// asymmetrically marked attribute they emit the unmasked side verbatim while
+// this implementation masks both. Every symmetric case stays byte-identical.
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.fmt = fmt;
 exports.isSens = isSens;
@@ -101,10 +107,19 @@ function summarize(plan) {
             for (const k of Array.from(new Set([...Object.keys(bObj), ...Object.keys(aObj)])).sort()) {
                 if (jsonEqual(bObj[k], aObj[k]))
                     continue;
+                // Union, not per-side: terraform applies a config-derived mark (a
+                // `sensitive = true` variable, sensitive(), a sensitive module output)
+                // to the PLANNED value only — it is never persisted to state — so a
+                // credential routinely arrives marked on exactly one side. Masking each
+                // side against its own mirror would emit the other side in cleartext
+                // (the `~ user_data = "old-plaintext" -> (sensitive value)` shape).
+                // Over-masking a symmetric pair costs nothing: both sides already
+                // render "(sensitive)".
+                const sensitive = isSens(bs, k) || isSens(as_, k);
                 attrs.push({
                     name: k,
-                    before: isSens(bs, k) ? '(sensitive)' : fmt(bObj[k]),
-                    after: isSens(as_, k) ? '(sensitive)' : fmt(aObj[k]),
+                    before: sensitive ? '(sensitive)' : fmt(bObj[k]),
+                    after: sensitive ? '(sensitive)' : fmt(aObj[k]),
                 });
             }
             if (attrs.length > 0)
@@ -120,15 +135,82 @@ function summarize(plan) {
     }
     return { added, changed, destroyed, drifted: added + changed + destroyed > 0, summary };
 }
-/** Forwards only `configuration.root_module.module_calls` for the optional
+/** Upper bound on the top-level module calls forwarded as provenance. A root
+ *  module with more direct calls than this is pathological; the overflow is
+ *  dropped and flagged rather than serialised. */
+const MAX_MODULE_CALLS = 100;
+const REDACTED = '(redacted)';
+/** Removes credentials a module source address can carry. Two shapes:
+ *   - URL userinfo — `git::https://x-access-token:ghp_…@github.com/org/mod.git`
+ *     (all userinfo is redacted, including a bare `token@`; a username alone is
+ *     a valid credential on GitHub/GitLab HTTPS);
+ *   - query parameters — go-getter accepts credential-bearing ones
+ *     (`sshkey=<base64 private key>`, S3 presigned `X-Amz-Signature=…`,
+ *     `token=…`), so only `ref` (the git ref / version selector, the one
+ *     provenance-bearing parameter) survives; every other value is redacted. */
+function scrubModuleSource(src) {
+    let out = src.replace(/(:\/\/)[^/?#@]*@/, `$1${REDACTED}@`);
+    const q = out.indexOf('?');
+    if (q >= 0) {
+        const params = out
+            .slice(q + 1)
+            .split('&')
+            .map((p) => {
+            const eq = p.indexOf('=');
+            if (eq < 0 || p.slice(0, eq) === 'ref')
+                return p;
+            return `${p.slice(0, eq)}=${REDACTED}`;
+        })
+            .join('&');
+        out = `${out.slice(0, q)}?${params}`;
+    }
+    return out;
+}
+/** Projects one `module_calls` entry down to provenance. Only string `source` /
+ *  `version_constraint` survive, so `expressions` (every literal argument's
+ *  `constant_value`), the recursive `module` subtree and any other member are
+ *  dropped by construction — no nested value can ride along. */
+function projectModuleCall(v) {
+    const out = {};
+    if (typeof v !== 'object' || v === null || Array.isArray(v))
+        return out;
+    const call = v;
+    if (typeof call.source === 'string')
+        out.source = fmt(scrubModuleSource(call.source));
+    if (typeof call.version_constraint === 'string')
+        out.version_constraint = fmt(call.version_constraint);
+    return out;
+}
+/** Forwards `configuration.root_module.module_calls` for the optional
  *  module-provenance field the backend accepts on dispatched runs. Not part of
- *  drift_summary.py (which omits provenance); orthogonal to the summary. */
+ *  drift_summary.py (which omits provenance); orthogonal to the summary.
+ *
+ *  The plan's `configuration` block carries NO terraform sensitivity metadata —
+ *  before_sensitive/after_sensitive exist only inside `resource_changes` — so
+ *  anything forwarded from it is unredacted by construction. The subtree is
+ *  therefore projected, never forwarded verbatim: per call only `source` (with
+ *  credentials scrubbed) and `version_constraint`, each capped by fmt() at 300
+ *  code points like every other emitted value, and at most MAX_MODULE_CALLS
+ *  entries (`module_calls_truncated: true` marks an overflow). The backend reads
+ *  exactly these two fields (driftingest.Configuration), so the projection drops
+ *  nothing any consumer uses. */
 function moduleCallsPlan(plan) {
-    return {
-        configuration: {
-            root_module: {
-                module_calls: plan?.configuration?.root_module?.module_calls ?? {},
-            },
-        },
-    };
+    const raw = plan?.configuration?.root_module?.module_calls;
+    const calls = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw : {};
+    // Null-prototype: a module named "__proto__" must land as an own property.
+    const module_calls = Object.create(null);
+    const names = Object.keys(calls).sort();
+    let truncated = names.length > MAX_MODULE_CALLS;
+    for (const name of names.slice(0, MAX_MODULE_CALLS)) {
+        const key = fmt(name);
+        if (key in module_calls) {
+            truncated = true; // two names collided after the 300-code-point cap
+            continue;
+        }
+        module_calls[key] = projectModuleCall(calls[name]);
+    }
+    const root_module = { module_calls };
+    if (truncated)
+        root_module.module_calls_truncated = true;
+    return { configuration: { root_module } };
 }
