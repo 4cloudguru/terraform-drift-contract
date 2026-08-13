@@ -15,8 +15,16 @@ jobs:
     name: Build, test, dist sync
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # SHA-pinned with a trailing version comment: a tag is mutable, so `@v4`
+      # let whoever controls the tag change what this job runs. zizmor's
+      # `ref-version-mismatch` audit checks the pin and the comment agree.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing after the checkout needs git credentials — the dist diff below
+          # is a local `git diff`. Leaving them in .git/config is zizmor's
+          # `artipacked` audit.
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
       - run: npm ci
@@ -29,3 +37,48 @@ jobs:
             echo "::error::dist is out of date — run 'npm run build' and commit the result."
             exit 1
           fi
+
+  # Nothing in this repo would previously have caught the missing `permissions:`
+  # floor in pr-checks.yml, an unpinned `uses:`, or a future edit that
+  # reintroduces a script-injection-prone `${{ }}` expansion. Two CI systems
+  # compile code from this package; these are the cheapest checks that keep the
+  # workflows themselves honest.
+  actionlint:
+    name: Lint GitHub Actions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actionlint
+        shell: bash
+        # Downloads the release asset and verifies it against actionlint's own
+        # published SHA256 before extracting, rather than the convenience install
+        # script, which pipes curl straight into tar with no integrity check.
+        # Matches the sibling repos' verify-before-extract convention.
+        run: |
+          set -euo pipefail
+          curl -sSfLO https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint_1.7.12_linux_amd64.tar.gz" | sha256sum -c -
+          tar xzf actionlint_1.7.12_linux_amd64.tar.gz actionlint
+      - name: Run actionlint
+        run: ./actionlint -color
+
+  zizmor:
+    name: Scan Workflows (zizmor)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
