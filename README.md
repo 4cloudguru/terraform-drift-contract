@@ -1,6 +1,7 @@
-# terraform-drift-contract
+# @4cloudguru/terraform-drift-contract
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![npm](https://img.shields.io/npm/v/@4cloudguru/terraform-drift-contract.svg)](https://www.npmjs.com/package/@4cloudguru/terraform-drift-contract)
 
 The **single source of truth** for parsing a Terraform/OpenTofu plan JSON
 (`terraform show -json` / `tofu show -json`) into Terraform State Manager (TSM)
@@ -14,10 +15,36 @@ cannot diverge:
 - kept in lockstep with the backend's Go `internal/services/driftingest` and the
   jq in the dispatched CI templates, via the vendored golden fixtures.
 
+## Install
+
+```bash
+npm install @4cloudguru/terraform-drift-contract
+```
+
+```jsonc
+// package.json of a consumer
+"dependencies": {
+  "@4cloudguru/terraform-drift-contract": "^1.1.0"
+}
+```
+
+Published to the public npm registry with [provenance](https://docs.npmjs.com/generating-provenance-statements),
+so `npm audit signatures` verifies the tarball back to the workflow run that
+built it. No registry auth is needed to install it.
+
+> **Consumer status.** Both consumers currently still install this package as a
+> git dependency pinned to the `v1.0.0` tag, through the pre-transfer
+> `github:sethbacon/terraform-drift-contract#v1.0.0` URL (which redirects here),
+> which is why fixes landed after that tag do not reach them. Moving them onto
+> the scoped npm
+> package is a separate change in each consumer repository. The npm package is
+> the supported way to consume this going forward; `dist/` stays committed so
+> the git form keeps working for anything not yet migrated.
+
 ## API
 
 ```ts
-import { summarize, moduleCallsPlan, type Plan, type Result } from 'terraform-drift-contract'
+import { summarize, moduleCallsPlan, type Plan, type Result } from '@4cloudguru/terraform-drift-contract'
 
 const plan: Plan = JSON.parse(fs.readFileSync('plan.json', 'utf8'))
 const r: Result = summarize(plan)
@@ -90,21 +117,8 @@ the class test so it cannot change silently.
 
 Until `drift_summary.py` and `driftingest` take the same union, an
 asymmetrically marked attribute renders differently depending on which
-implementation produced the drift record.
-
-## Consuming it (no registry required)
-
-Both consumers `ncc`-bundle this package, so it is a **build-time only**
-dependency — installed straight from git, no npm/GitHub-Packages auth:
-
-```jsonc
-// package.json of a consumer
-"dependencies": {
-  "terraform-drift-contract": "github:sethbacon/terraform-drift-contract#v1.0.0"
-}
-```
-
-`dist/` is committed, so the git install needs no build step.
+implementation produced the drift record. See [SECURITY.md](SECURITY.md) for the
+cross-implementation obligation this creates.
 
 ## Contract
 
@@ -118,8 +132,41 @@ update the fixtures here in the same change** — every consumer pulls from here
 ```bash
 npm install
 npm test        # vitest contract tests
+npm run lint    # tsc --noEmit
 npm run build   # tsc → dist/  (commit the result)
 ```
+
+`dist/` is committed and CI fails if it is stale, so a source change that is not
+rebuilt in the same commit does not merge.
+
+## Releasing
+
+There is no manual publish step and no long-lived registry token.
+
+1. **Land conventional commits on `main`.** PR titles are validated by the
+   `Conventional PR Title` check and PRs are squash-merged, so the PR title
+   becomes the commit subject that release-please reads.
+2. **release-please opens a release PR** (`.github/workflows/release-please.yml`)
+   computing the next version from the commit history — `fix:` → patch, `feat:`
+   → minor, `BREAKING CHANGE:` → major. It maintains `CHANGELOG.md`, the
+   `package.json` version and `.release-please-manifest.json`. Per the suite
+   convention, one merged commit announces **at most one** breaking change.
+3. **Merging the release PR** tags `vX.Y.Z` and publishes a GitHub Release.
+4. **The release publishes the package** (`.github/workflows/publish.yml`): an
+   unprivileged job builds, tests, audits and packs the tarball, then a separate
+   job — gated on the `release` environment's required reviewer and a `v*` tag
+   policy — publishes it.
+
+Publishing uses **npm trusted publishing**: the registry credential is minted
+from the workflow's OIDC token and matched against the trusted publisher
+configured on npmjs for this package. There is no `NPM_TOKEN` anywhere, and the
+publishing job holds no repository secrets. `publishConfig.provenance` plus
+`id-token: write` produce the provenance attestation, and the published tarball
+is additionally attested with its CycloneDX SBOM.
+
+The CHANGELOG is load-bearing: this package's semantics are reconciled with a Go
+and a Python implementation, and the release notes are how those learn that a
+divergence exists.
 
 ## License
 
