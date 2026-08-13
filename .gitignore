@@ -3,4 +3,6 @@ node_modules/
 coverage/
 .DS_Store
 # dist/ is intentionally committed so git-dependency consumers
-# (npm install github:sethbacon/terraform-drift-contract#vX) need no build step.
+# (npm install github:4cloudguru/terraform-drift-contract#vX) need no build
+# step. The supported install is the published @4cloudguru/terraform-drift-contract
+# package; the git form stays viable for consumers not yet migrated.
