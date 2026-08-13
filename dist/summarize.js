@@ -22,7 +22,20 @@
 //     "(sensitive)" when before_sensitive/after_sensitive marks them.
 //
 // terraform -json does NOT mask sensitive values (only human output does), so
-// masking happens here, BEFORE fmt(), so secrets never reach the formatter.
+// masking happens here, BEFORE fmt(), so a marked secret never reaches the
+// formatter.
+//
+// TWO PRECONDITIONS on that, both load-bearing and neither optional:
+//   - it is per TOP-LEVEL changed key. isSens() is evaluated against
+//     ch.before_sensitive[k] / ch.after_sensitive[k] only, never against a
+//     nested path inside an unmarked key's value — a secret nested under an
+//     unmarked key is serialised whole;
+//   - it is driven ENTIRELY by that metadata. When a plan carries neither
+//     mirror, nothing is masked for that resource. That is deliberate and
+//     fail-open (masking it would mask every attribute of every such plan, and
+//     would diverge from the Go mirror, which fails open identically); it is
+//     pinned by a test row and documented in SECURITY.md. It is NOT a guarantee
+//     that holds for plans of unknown provenance.
 //
 // An attribute is masked when EITHER side marks it sensitive. This was a
 // deliberate divergence when it landed in v1.1.0; the Go driftingest took the
@@ -51,9 +64,33 @@ function pyBool(v) {
         return Object.keys(v).length > 0;
     return Boolean(v);
 }
-/** Deterministic JSON with sorted keys + compact separators — matches python
- *  json.dumps(v, separators=(",",":"), sort_keys=True). */
+/** Deterministic JSON with sorted keys and compact separators.
+ *
+ *  This is JS-native JSON with the keys sorted — NOT a reproduction of any other
+ *  language's serializer. An earlier revision of this comment claimed it matched
+ *  `json.dumps(v, separators=(",",":"), sort_keys=True)`; it does not, and the
+ *  Python file that claim pointed at never existed (see SECURITY.md). The
+ *  differences are real and observable, so they are written down here rather
+ *  than asserted away:
+ *    - non-ASCII is emitted RAW (`"café"`), where json.dumps defaults to
+ *      ensure_ascii=True and would emit `"café"`;
+ *    - keys sort by UTF-16 code unit, so an above-BMP key sorts before U+FFFF
+ *      here and after it in a code-point sort;
+ *    - U+2028/U+2029 are left raw;
+ *    - Go's encoding/json HTML-escapes `<`, `>` and `&` by default; this does
+ *      not.
+ *  The Go `driftingest` mirror agrees with this implementation on the first two
+ *  and differs on the last. Reconciling the byte-level form across the
+ *  implementations is tracked in #17 and needs a spec change on all sides, not a
+ *  one-sided edit here.
+ *
+ *  `undefined` canonicalises to `"null"`, matching the Go mirror's `canon()`,
+ *  which maps both an absent key and an explicit null to `"null"` — without it
+ *  this function returns the VALUE undefined and its `: string` signature is a
+ *  runtime lie. */
 function stableStringify(v) {
+    if (v === undefined)
+        return 'null';
     if (v === null || typeof v !== 'object')
         return JSON.stringify(v);
     if (Array.isArray(v))
@@ -71,7 +108,18 @@ function fmt(v) {
     if (v === null || v === undefined)
         return null;
     const s = typeof v === 'string' ? v : stableStringify(v);
-    const cps = Array.from(s); // code points, matching python len()/slice
+    // A UTF-16 length <= 300 implies a code-point length <= 300 (a code point is
+    // never fewer than one unit), so this returns exactly what the path below
+    // would — without allocating one JS string per code point for a value we are
+    // about to keep at most 300 of. The old unconditional Array.from() cost ~22x
+    // the input in peak heap: 1.4 GiB for a single 64 MiB attribute value.
+    if (s.length <= 300)
+        return s;
+    // Past that, bound the array work instead of materialising the whole value.
+    // 301 code points — all the decision below needs — occupy at most 602 UTF-16
+    // units, so 1200 always contains them. A surrogate pair split at the slice
+    // boundary lands beyond index 300 and is discarded either way.
+    const cps = Array.from(s.slice(0, 1200)); // code points, not UTF-16 units
     return cps.length <= 300 ? s : cps.slice(0, 300).join('') + '…';
 }
 /** The canonical `isSens`: before_sensitive/after_sensitive mirror the value
@@ -95,12 +143,38 @@ function summarize(plan) {
     let added = 0;
     let changed = 0;
     let destroyed = 0;
-    for (const c of plan?.resource_changes ?? []) {
+    // The plan is attacker-influenced JSON that has been through JSON.parse, not a
+    // typed object: every field is `unknown` at runtime no matter what `Plan`
+    // declares. Normalise the three fields this loop reads ONCE, here, so that
+    // every reader below sees the declared type and the two helpers cannot
+    // disagree about it. Previously `isSkipped` duck-typed `actions` while `has`
+    // guarded it, so `{"length":1,"0":"no-op"}` was DROPPED from the summary
+    // entirely, and a non-array `resource_changes` threw a raw TypeError out of
+    // the library into the consumer's CI step.
+    const changes = Array.isArray(plan?.resource_changes) ? plan.resource_changes : [];
+    for (const c of changes) {
+        // A null or primitive entry is valid JSON; reading `.change` off it throws.
+        if (c === null || typeof c !== 'object' || Array.isArray(c))
+            continue;
+        // `?? {}` is sufficient here and no type check is added: only null and
+        // undefined throw on a property read, and reading `.actions` off a string or
+        // a number auto-boxes to undefined, which the normalisation below turns into
+        // []. A type check was written here first and mutation testing proved it
+        // inert — no input reached it — so it was removed rather than left in place
+        // looking like a guard.
         const ch = c.change ?? {};
-        const actions = ch.actions ?? [];
+        // A malformed action list degrades to an uncounted-but-PRESENT entry rather
+        // than a silently dropped one: dropping it conceals drift, and emitting the
+        // raw value puts a non-array in a field `SummaryEntry` declares `string[]`,
+        // which makes the Go driftingest reject the whole POST rather than one row.
+        const actions = Array.isArray(ch.actions) ? ch.actions.filter((a) => typeof a === 'string') : [];
         if (isSkipped(actions))
             continue;
-        const item = { address: c.address ?? '', actions };
+        // Type check only, deliberately NOT truncated: the address is the summary's
+        // primary key — how a drift record is matched to a resource by the backend,
+        // the Action and the ADO task — so capping it would break record identity.
+        // That residual is documented in SECURITY.md.
+        const item = { address: typeof c.address === 'string' ? c.address : '', actions };
         const before = ch.before;
         const after = ch.after;
         if (before !== null && typeof before === 'object' && !Array.isArray(before) &&

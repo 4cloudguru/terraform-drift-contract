@@ -29,11 +29,19 @@ pin moves — that is a property of the pin, not of a release.
 - **Attribute values are masked from either sensitivity mirror.** `summarize()`
   emits `attrs[].before` / `attrs[].after` as the literal `"(sensitive)"` when
   **either** `before_sensitive` or `after_sensitive` marks the key. Masking
-  happens before `fmt()`, so a secret is never passed to the formatter. Prior to
-  v1.1.0 each side was masked only against its own mirror, so an attribute marked
-  on one side had the other side emitted verbatim — that is the routine shape for
-  a config-derived mark, which terraform applies to the planned value only and
-  never persists to state.
+  happens before `fmt()`, so a *marked* secret is never passed to the formatter.
+  Prior to v1.1.0 each side was masked only against its own mirror, so an
+  attribute marked on one side had the other side emitted verbatim — that is the
+  routine shape for a config-derived mark, which terraform applies to the planned
+  value only and never persists to state.
+
+  This guarantee has **two preconditions**, stated here because stating it
+  unconditionally is itself a finding. It is applied *per top-level changed key*
+  — `isSens()` reads `before_sensitive[k]` / `after_sensitive[k]` and never a
+  nested path, so **a secret nested under an unmarked top-level key is serialised
+  whole** — and it is driven *entirely* by that metadata, so a plan carrying
+  neither mirror gets no masking at all (next section). Neither precondition is
+  a bug to be fixed silently; both are how the mirrors behave too.
 - **Module provenance is projected, not forwarded.** `moduleCallsPlan()` emits
   only `source` and `version_constraint` per module call. The plan's
   `configuration` block carries no sensitivity metadata at all, so
@@ -52,12 +60,13 @@ by inverting the guard and confirming the rows fail.
 - **`summary[].address` is not masked, and not truncated.** Resource addresses
   are emitted verbatim, so a `for_each`/`count` key derived from a secret (for
   example `aws_secretsmanager_secret.this["<the secret value>"]`) still reaches
-  the summary. This is true of all four implementations of the contract. It is a
+  the summary. This is true of all implementations of the contract. It is a
   known, deliberately unfixed residual: the address is the summary's primary key
   — it is how a drift record is matched to a resource by the backend, by the
   Action and by the ADO task — so masking or truncating it would break record
   identity. Do not use plan output as a place where secrets may safely appear in
-  a resource address.
+  a resource address. It *is* type-checked: a non-string `address` is emitted as
+  `""` rather than put into a field the exported type declares `string`.
 - **Values are emitted unmasked when the plan carries no sensitivity metadata.**
   When neither `before_sensitive` nor `after_sensitive` is present for a change,
   values are emitted as-is. This is deliberate and fail-open: plans without
@@ -111,9 +120,21 @@ Both divergences this document previously tracked as open are **closed**.
   capped and bounded exactly as `moduleCallsPlan()` does, verified byte-identical
   to this package across the provenance vectors.
 
-Three cross-implementation differences remain. All three are **pre-existing**,
-none is a redaction gap, and none involves a value being emitted less masked than
-it is here:
+- **The absent-vs-null axis is reconciled.** `stableStringify()` returned the
+  *value* `undefined` for an absent key, so `jsonEqual` compared `undefined`
+  against `'null'` and reported a change — emitting a phantom
+  `{before: null, after: null}` attribute, and giving an entry an `attrs` array
+  where the Go-ingested record for the identical plan carried none. Terraform
+  produces that shape routinely (an attribute whose post-apply value is unknown
+  is omitted from `after` and reported in `after_unknown`). The Go mirror's
+  `canon()` has always mapped both an absent key and an explicit null to
+  `"null"`; this package now does the same, so the fix **closed** a divergence
+  rather than opening one. It is the one behavioural change in that batch and
+  reaches consumers only on the next release.
+
+Cross-implementation differences that remain. All are **pre-existing**, none is a
+redaction gap, and none involves a value being emitted less masked than it is
+here:
 
 1. **`actions: null` vs `actions: []`.** For a `resource_changes` entry with no
    `actions` key at all, Go marshals its nil `[]string` as `null` where this
@@ -134,6 +155,49 @@ it is here:
    And `DRIFTED` is the plan's `-detailed-exitcode` (`[ "$PLAN_EXIT" = "2" ]`)
    rather than `(added + changed + destroyed) > 0`. Defensible — arguably more
    authoritative — but a divergence from what this document specifies.
+
+### Known residuals that need a spec change, not a one-sided edit
+
+These are open, reproduced, and deliberately **not** fixed here, because each
+would change what `summarize()` emits and this package's semantics are the thing
+the other implementations are diffed against. Fixing any of them one-sidedly
+creates exactly the divergence this document exists to prevent. Each needs a
+decision recorded across all implementations first:
+
+- **Serialized byte form is JS-native, not a shared canonical form**
+  ([#17](https://github.com/4cloudguru/terraform-drift-contract/issues/17)).
+  Non-ASCII is emitted raw, keys sort by UTF-16 code unit (so an above-BMP key
+  sorts before U+FFFF, where a code-point sort puts it after), and U+2028/U+2029
+  are not escaped. Go agrees on the first two and additionally HTML-escapes
+  `<`, `>` and `&`. Because escaped forms are longer, the 300-code-point
+  truncation also lands at a different offset, so two implementations can retain
+  *different* content from the same attribute. `stableStringify`'s comment used
+  to claim `json.dumps(sort_keys=True)` parity; that claim was false and has been
+  replaced with the list of actual differences.
+- **Numbers are IEEE-754 doubles**
+  ([#18](https://github.com/4cloudguru/terraform-drift-contract/issues/18)).
+  `JSON.parse` collapses integers past 2^53, so two distinct 20-digit serials
+  compare equal and the changed attribute is dropped from `attrs` silently.
+  Whole floats (`2.0` → `2`) and `-0` also normalise. Go unmarshals into
+  `interface{}` and hits the same ceiling, so **TS and Go agree today**; the fix
+  is a parse-boundary change in the consumers, not an edit here.
+- **Nothing bounds the summary**
+  ([#14](https://github.com/4cloudguru/terraform-drift-contract/issues/14)).
+  `fmt()`'s 300-code-point cap is per value; there is no cap on entries, on
+  attrs per entry, or on total bytes, and no counts-only mode. 5000 resources ×
+  50 attrs produced a 153 MiB callback body. Adding caps means adding truthful
+  truncation markers to the `Result` shape, which is an API and contract change
+  for every consumer and mirror.
+- **`stableStringify` recursion is unbounded**
+  ([#11](https://github.com/4cloudguru/terraform-drift-contract/issues/11)).
+  It throws `RangeError` at ~2500 levels of object nesting, out of
+  `summarize()` and into the consumer's CI step, suppressing the drift report —
+  while `JSON.parse` accepts far deeper documents. A depth limit must be the
+  *same* limit in every implementation, and the overflow behaviour (typed error
+  vs sentinel value) is a contract decision.
+- **Redaction fails open when a plan carries no sensitivity metadata**
+  ([#10](https://github.com/4cloudguru/terraform-drift-contract/issues/10)).
+  Covered above: deliberate, matched by the Go mirror, pinned by a test row.
 
 The drift callback's `module_locks` field is **not produced by this package** —
 each consumer assembles it from `.terraform/modules/modules.json` — but the same
