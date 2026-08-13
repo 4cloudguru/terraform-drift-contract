@@ -6,8 +6,9 @@ import { summarize, moduleCallsPlan, fmt, isSens, Plan } from '../src/summarize'
 const load = (name: string): Plan =>
   JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8'))
 
-// These assertions mirror drift_summary.py (the authoritative dispatch
-// summarizer) and the reconciled backend driftingest. Keep them in lockstep.
+// These assertions ARE the contract's vectors: the backend's driftingest and the
+// jq in its dispatched CI templates are diffed against them. Keep them in
+// lockstep — a change here obliges a matching change there (see SECURITY.md).
 describe('summarize — counts, skip rules, drifted', () => {
   it('mixed plan: +2 ~1 -2, drifted, no-op AND read both excluded from summary', () => {
     const r = summarize(load('mixed.json'))

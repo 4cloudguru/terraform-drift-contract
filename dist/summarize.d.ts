@@ -36,11 +36,11 @@ export interface Result {
     drifted: boolean;
     summary: SummaryEntry[];
 }
-/** Verbatim port of drift_summary.py `fmt`: strings pass through raw, everything
- *  else is compact sorted JSON; truncate past 300 code points with U+2026. */
+/** The canonical `fmt`: strings pass through raw, everything else is compact
+ *  sorted JSON; truncate past 300 code points with U+2026. */
 export declare function fmt(v: unknown): string | null;
-/** Verbatim port of drift_summary.py `is_sens`: before_sensitive/after_sensitive
- *  mirror the value shape; True (or a non-empty nested dict/list) → mask. */
+/** The canonical `isSens`: before_sensitive/after_sensitive mirror the value
+ *  shape; true (or a non-empty nested object/array) → mask. */
 export declare function isSens(sens: unknown, k: string): boolean;
 export declare function summarize(plan: Plan | null | undefined): Result;
 /** Module provenance: exactly the two fields the backend's driftingest
@@ -50,8 +50,8 @@ export interface ModuleCallProvenance {
     version_constraint?: string;
 }
 /** Forwards `configuration.root_module.module_calls` for the optional
- *  module-provenance field the backend accepts on dispatched runs. Not part of
- *  drift_summary.py (which omits provenance); orthogonal to the summary.
+ *  module-provenance field the backend accepts on dispatched runs. Orthogonal to
+ *  the summary, and not part of the count/skip semantics above.
  *
  *  The plan's `configuration` block carries NO terraform sensitivity metadata —
  *  before_sensitive/after_sensitive exist only inside `resource_changes` — so

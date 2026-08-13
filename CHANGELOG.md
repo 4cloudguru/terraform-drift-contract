@@ -22,3 +22,15 @@
 
 * add SECURITY.md — the masking guarantees, the deliberate fail-open when a plan carries no sensitivity metadata, the unmasked summary[].address residual, and the obligation to mirror any semantics change into the Go and Python implementations ([a891cf3](https://github.com/4cloudguru/terraform-drift-contract/commit/a891cf3902db2ef944fe9c7f3280fd6133a3d7cc))
 * record the PR [#35](https://github.com/4cloudguru/terraform-drift-contract/issues/35) contract divergence — a one-sided sensitivity mark now masks BOTH sides here, while the Go driftingest and drift_summary.py still emit the unmarked side verbatim ([a891cf3](https://github.com/4cloudguru/terraform-drift-contract/commit/a891cf3902db2ef944fe9c7f3280fd6133a3d7cc)), closes [#16](https://github.com/4cloudguru/terraform-drift-contract/issues/16) [#9](https://github.com/4cloudguru/terraform-drift-contract/issues/9) [#10](https://github.com/4cloudguru/terraform-drift-contract/issues/10) [#15](https://github.com/4cloudguru/terraform-drift-contract/issues/15) [#24](https://github.com/4cloudguru/terraform-drift-contract/issues/24) [#25](https://github.com/4cloudguru/terraform-drift-contract/issues/25)
+
+
+> **Correction to the entry above.** Two claims in it are no longer true, and one
+> never was. The Go `driftingest` takes the same union as of
+> [terraform-state-manager-backend#374](https://github.com/sethbacon/terraform-state-manager-backend/pull/374),
+> which also projected the dispatched jq `module_calls`, so **that divergence is
+> closed on both axes**. And `drift_summary.py` does not exist — there is no such
+> file in this repository, in `terraform-state-manager-backend`, or anywhere in
+> the suite's history. The authority for these semantics is `src/summarize.ts`
+> plus its test vectors. See [SECURITY.md](SECURITY.md) for the current
+> reconciliation status and the three residual differences, none of which is a
+> redaction gap.

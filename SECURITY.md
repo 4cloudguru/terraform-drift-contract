@@ -73,33 +73,74 @@ by inverting the guard and confirming the rows fail.
 
 ## Cross-implementation obligation
 
-The semantics here are reconciled across four implementations:
+The semantics are **defined here** and mirrored by three implementations:
 
 | Implementation | Location |
 | --- | --- |
-| TypeScript (canonical package) | this repository |
+| TypeScript (canonical) | this repository — `src/summarize.ts`, with `__tests__/` as its vectors |
 | Go `driftingest` | `terraform-state-manager-backend`, `internal/services/driftingest` |
-| Python `drift_summary.py` | the canonical dispatch summarizer |
 | jq | the dispatched CI templates in `internal/api/drift_workflows.go` |
+
+`src/summarize.ts` plus its test vectors **is** the authority: it is what the
+other two are diffed against, and the only artifact a disagreement can be
+settled with. Earlier revisions of this document, of the README and of the
+sources named a Python `drift_summary.py` as "the canonical dispatch
+summarizer". No such file exists — not in this repository, not in
+`terraform-state-manager-backend`, not anywhere in the suite's history — so for
+as long as it was cited, all three implementations claimed parity with a file
+nobody could diff against. The citation has been removed everywhere; do not
+reintroduce it.
 
 **A change to the redaction or counting semantics here obliges a matching change
 in the others.** A one-sided fix is how a masking control ends up applied in one
 runtime and not another for the same drift record.
 
-### Known divergence (open)
+### Reconciliation status
 
-Since v1.1.0 this package masks an attribute when **either** mirror marks it.
-`drift_summary.py` and the Go `driftingest` (`changedAttrs` / `maskOrFmt`) still
-mask each side against its own mirror, so they emit the unmarked side verbatim.
-Until they take the same union, an asymmetrically marked attribute renders
-differently depending on which implementation produced the record — and the
-unmarked side is a real disclosure in those two.
+Both divergences this document previously tracked as open are **closed**.
 
-The jq in the backend's dispatched pipelines (both the GitHub and Azure DevOps
-templates) still forwards the raw `module_calls` subtree, which is the defect
-`moduleCallsPlan()` fixed here, on a path that never calls this package.
+- **The sensitivity axis is reconciled.** Since v1.1.0 this package masks an
+  attribute when either mirror marks it; the Go `driftingest` (`changedAttrs` /
+  `maskOrFmt`) takes the same union as of
+  [`terraform-state-manager-backend#374`](https://github.com/sethbacon/terraform-state-manager-backend/pull/374),
+  verified byte-identical to this package across the sensitivity vectors. This
+  axis does not exist in the jq path at all: the dispatched `SUMMARY` emits only
+  `{address, actions}` and no `attrs`, so it has no attribute values to mask.
+- **The `module_calls` axis is reconciled.** Both dispatched jq templates now
+  project each call to `source` (credentials scrubbed) + `version_constraint`,
+  capped and bounded exactly as `moduleCallsPlan()` does, verified byte-identical
+  to this package across the provenance vectors.
 
-Both are tracked as follow-ups outside this repository.
+Three cross-implementation differences remain. All three are **pre-existing**,
+none is a redaction gap, and none involves a value being emitted less masked than
+it is here:
+
+1. **`actions: null` vs `actions: []`.** For a `resource_changes` entry with no
+   `actions` key at all, Go marshals its nil `[]string` as `null` where this
+   package emits `[]`. Terraform always writes `actions`, so this reaches only a
+   hand-built or malformed plan — but a `null` in a stored summary is a real
+   shape difference for a consumer that iterates it.
+2. **A malformed `configuration` costs the whole plan in Go.**
+   `driftingest.Plan` types `module_calls` as a map of structs, so a plan where a
+   module call is an array (or `module_calls` is a string) fails
+   `json.Unmarshal` and `/drift/ingest` answers 422, discarding an otherwise
+   valid summary. This package coerces to `{}` and summarizes normally. Go's
+   behaviour is fail-closed, so it is an availability/shape difference, not a
+   disclosure.
+3. **The jq `SUMMARY` and `DRIFTED` differ from the stated contract.**
+   `select(.change.actions != ["no-op"])` excludes only no-op, so a resource with
+   `actions: ["read"]` appears in a dispatched summary where this package and Go
+   skip it (counts are unaffected — a read contains no create/update/delete).
+   And `DRIFTED` is the plan's `-detailed-exitcode` (`[ "$PLAN_EXIT" = "2" ]`)
+   rather than `(added + changed + destroyed) > 0`. Defensible — arguably more
+   authoritative — but a divergence from what this document specifies.
+
+The drift callback's `module_locks` field is **not produced by this package** —
+each consumer assembles it from `.terraform/modules/modules.json` — but the same
+scrubbing obligation applies to it, because it carries the *same* module source
+addresses `moduleCallsPlan()` scrubs. `terraform-drift-report` projects and
+scrubs it in `projectModuleLocks()`; the backend's dispatched templates do so in
+[`terraform-state-manager-backend#377`](https://github.com/sethbacon/terraform-state-manager-backend/pull/377).
 
 ## Supply chain
 

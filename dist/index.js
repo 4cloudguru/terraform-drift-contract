@@ -5,8 +5,10 @@ exports.isSens = exports.fmt = exports.moduleCallsPlan = exports.summarize = voi
 // count/summary/attrs semantics shared by every drift consumer:
 //   - the GitHub Action  (terraform-drift-report)
 //   - the Azure DevOps task (TerraformDriftReport, initiative 6)
-//   - reconciled with the backend's internal/services/driftingest (Go) and the
-//     dispatch summarizer drift_summary.py, via the vendored golden fixtures.
+//   - mirrored by the backend's internal/services/driftingest (Go) and by the jq
+//     in its dispatched CI templates, via the vendored golden fixtures. This
+//     package (src/summarize.ts + __tests__/) is the authority they are diffed
+//     against; see SECURITY.md.
 var summarize_1 = require("./summarize");
 Object.defineProperty(exports, "summarize", { enumerable: true, get: function () { return summarize_1.summarize; } });
 Object.defineProperty(exports, "moduleCallsPlan", { enumerable: true, get: function () { return summarize_1.moduleCallsPlan; } });

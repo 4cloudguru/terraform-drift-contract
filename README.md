@@ -13,7 +13,9 @@ cannot diverge:
 - [`terraform-drift-report`](https://github.com/sethbacon/terraform-drift-report) — the GitHub Action
 - the Azure DevOps `TerraformDriftReport` task (`azure-pipelines-terraform`, initiative 6)
 - kept in lockstep with the backend's Go `internal/services/driftingest` and the
-  jq in the dispatched CI templates, via the vendored golden fixtures.
+  jq in the dispatched CI templates, via the vendored golden fixtures. This
+  package — `src/summarize.ts` plus `__tests__/` — is the authority those two are
+  diffed against.
 
 ## Install
 
@@ -51,7 +53,7 @@ const r: Result = summarize(plan)
 // r = { added, changed, destroyed, drifted, summary: [{ address, actions }] }
 ```
 
-### Semantics (must match `drift_summary.py` exactly)
+### Semantics (the authority the other implementations mirror)
 
 - `added` / `changed` / `destroyed` = resources whose actions **contain**
   create / update / delete (a replacement `["delete","create"]` counts as
@@ -64,17 +66,18 @@ const r: Result = summarize(plan)
   (300 code-point truncation, U+2026 marker) and masked to the literal
   `"(sensitive)"` when **either** `before_sensitive` **or** `after_sensitive`
   marks them (terraform `-json` does **not** pre-mask — masking happens here,
-  before `fmt()`, so secrets never reach the formatter). The union is a
-  [deliberate divergence](#contract-divergences);
+  before `fmt()`, so secrets never reach the formatter). The union landed in
+  v1.1.0 and is now matched by the other implementations — see
+  [cross-implementation status](#cross-implementation-status);
 - `drifted` = `(added + changed + destroyed) > 0` (a pure replace has
   `changed == 0` but `drifted == true`; do not infer "no drift" from
   `changed == 0`).
 
 ### Module provenance (`moduleCallsPlan`)
 
-Optional, orthogonal to the summary, and **not** part of `drift_summary.py`:
-the `plan` field of the drift callback, carrying which modules a root module
-calls.
+Optional, orthogonal to the summary, and not part of the count/skip semantics
+above: the `plan` field of the drift callback, carrying which modules a root
+module calls.
 
 The plan's `configuration` block carries **no terraform sensitivity metadata**
 at all — `before_sensitive`/`after_sensitive` exist only inside
@@ -96,29 +99,34 @@ and the raw `source` (which can embed a PAT). The subtree is therefore
   **100** module calls are emitted (sorted by name); an overflow sets
   `configuration.root_module.module_calls_truncated: true`.
 
-### Contract divergences
+### Cross-implementation status
 
-Where this package is deliberately **stricter** than the other implementations
-of the contract (`drift_summary.py`, the Go `driftingest`, and the jq in the
-backend's dispatched CI templates). Both entries are fail-closed: they only ever
-*add* masking, so any output that was already masked is unchanged.
+The two redaction behaviours this package introduced ahead of the others are now
+**matched by both** — the Go `driftingest` and the jq in the backend's dispatched
+CI templates:
 
-| Case | Here | `drift_summary.py` / Go `driftingest` |
-| --- | --- | --- |
-| An attribute marked sensitive on **one** side only (config-derived marks apply to the planned value only, so this is routine) | **both** sides `"(sensitive)"` | each side masked against its own mirror, so the unmarked side is emitted verbatim |
-| `module_calls` provenance | projected + credential-scrubbed + capped (above) | the jq templates forward the raw subtree; `drift_summary.py` emits no provenance |
+| Behaviour | Status |
+| --- | --- |
+| An attribute marked sensitive on **one** side only (config-derived marks apply to the planned value only, so this is routine) → **both** sides `"(sensitive)"` | reconciled with Go in [backend#374](https://github.com/sethbacon/terraform-state-manager-backend/pull/374); the jq path has no `attrs` to mask |
+| `module_calls` provenance projected + credential-scrubbed + capped (above) | both jq templates project identically as of [backend#374](https://github.com/sethbacon/terraform-state-manager-backend/pull/374) |
 
-Neither divergence changes counting or skip semantics, and neither changes the
+Neither behaviour changes counting or skip semantics, and neither changes the
 symmetric case (both mirrors marking the key, or neither): those stay
 byte-identical. When **neither** mirror is present the change is emitted
 unmasked — that is the shape of a plan with no sensitivity metadata at all, and
 masking it would mask every attribute of every such plan; this is asserted in
 the class test so it cannot change silently.
 
-Until `drift_summary.py` and `driftingest` take the same union, an
-asymmetrically marked attribute renders differently depending on which
-implementation produced the drift record. See [SECURITY.md](SECURITY.md) for the
-cross-implementation obligation this creates.
+Three differences do remain — `actions: null` vs `[]` on a plan with no
+`actions` key, Go answering 422 for a malformed `configuration` where this
+package tolerates it, and the jq `SUMMARY` not skipping `["read"]` while taking
+`drifted` from the plan's exit code. All three are pre-existing and **none is a
+redaction gap**. See [SECURITY.md](SECURITY.md) for the detail and for the
+cross-implementation obligation.
+
+> **Note.** Earlier revisions of this README named a Python `drift_summary.py` as
+> the file these semantics must match. No such file exists anywhere in the suite.
+> The authority is this package: `src/summarize.ts` and its test vectors.
 
 ## Contract
 
@@ -164,9 +172,9 @@ publishing job holds no repository secrets. `publishConfig.provenance` plus
 `id-token: write` produce the provenance attestation, and the published tarball
 is additionally attested with its CycloneDX SBOM.
 
-The CHANGELOG is load-bearing: this package's semantics are reconciled with a Go
-and a Python implementation, and the release notes are how those learn that a
-divergence exists.
+The CHANGELOG is load-bearing: this package's semantics are mirrored by a Go and
+a jq implementation, and the release notes are how those learn that a divergence
+exists.
 
 ## License
 
