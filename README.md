@@ -34,14 +34,13 @@ Published to the public npm registry with [provenance](https://docs.npmjs.com/ge
 so `npm audit signatures` verifies the tarball back to the workflow run that
 built it. No registry auth is needed to install it.
 
-> **Consumer status.** Both consumers currently still install this package as a
-> git dependency pinned to the `v1.0.0` tag, through the pre-transfer
-> `github:sethbacon/terraform-drift-contract#v1.0.0` URL (which redirects here),
-> which is why fixes landed after that tag do not reach them. Moving them onto
-> the scoped npm
-> package is a separate change in each consumer repository. The npm package is
-> the supported way to consume this going forward; `dist/` stays committed so
-> the git form keeps working for anything not yet migrated.
+> **Consumer status.** Both consumers are on the scoped npm package at
+> `^1.1.0` — the GitHub Action (`terraform-drift-report`) and the Azure DevOps
+> `TerraformDriftReport` task — so the v1.1.0 redaction fixes reach both. They
+> previously pinned the pre-transfer git URL
+> `github:sethbacon/terraform-drift-contract#v1.0.0`, which is why an earlier
+> revision of this note said fixes did not reach them. `dist/` stays committed
+> so the git form keeps working for anything not yet migrated.
 
 ## API
 
