@@ -1,10 +1,15 @@
-// Canonical TypeScript port of the TSM drift summarizer (drift_summary.py) — the
-// single source of truth for parsing Terraform/OpenTofu plan JSON into the TSM
-// drift callback payload. Consumed (and ncc-bundled) by the terraform-drift-report
-// GitHub Action and the Azure DevOps TerraformDriftReport task, and reconciled
-// with the backend's internal/services/driftingest (Go).
+// The canonical TSM drift summarizer — the single source of truth for parsing
+// Terraform/OpenTofu plan JSON into the TSM drift callback payload. Consumed (and
+// ncc-bundled) by the terraform-drift-report GitHub Action and the Azure DevOps
+// TerraformDriftReport task, and mirrored by the backend's
+// internal/services/driftingest (Go) and the jq in its dispatched CI templates.
 //
-// Semantics MUST match drift_summary.py exactly:
+// This file, together with __tests__/, IS the authority those two are diffed
+// against. Earlier revisions described it as a port of a Python
+// `drift_summary.py`; no such file exists anywhere in the suite, so that citation
+// named nothing and has been removed (see SECURITY.md). Do not reintroduce it.
+//
+// The semantics the mirrors must match:
 //   - skip resource changes whose actions are EXACTLY ["no-op"] or ["read"];
 //   - counts are replace-aware and NOT mutually exclusive: a replacement
 //     ["delete","create"] bumps BOTH added and destroyed (changed only on
@@ -18,11 +23,12 @@
 // terraform -json does NOT mask sensitive values (only human output does), so
 // masking happens here, BEFORE fmt(), so secrets never reach the formatter.
 //
-// DELIBERATE DIVERGENCE (see README "Contract divergences"): an attribute is
-// masked when EITHER side marks it sensitive. drift_summary.py and the Go
-// driftingest still mask each side against its own mirror, so for an
-// asymmetrically marked attribute they emit the unmasked side verbatim while
-// this implementation masks both. Every symmetric case stays byte-identical.
+// An attribute is masked when EITHER side marks it sensitive. This was a
+// deliberate divergence when it landed in v1.1.0; the Go driftingest took the
+// same union in terraform-state-manager-backend#374 and is now byte-identical
+// here, so it is simply the contract. The jq path has no attribute values to
+// mask — its summary is {address, actions} only. See SECURITY.md for the
+// differences that do remain, none of which is a redaction gap.
 
 export interface AttrChange {
   name: string
@@ -92,8 +98,8 @@ function jsonEqual(a: unknown, b: unknown): boolean {
   return stableStringify(a) === stableStringify(b)
 }
 
-/** Verbatim port of drift_summary.py `fmt`: strings pass through raw, everything
- *  else is compact sorted JSON; truncate past 300 code points with U+2026. */
+/** The canonical `fmt`: strings pass through raw, everything else is compact
+ *  sorted JSON; truncate past 300 code points with U+2026. */
 export function fmt(v: unknown): string | null {
   if (v === null || v === undefined) return null
   const s = typeof v === 'string' ? v : stableStringify(v)
@@ -101,8 +107,8 @@ export function fmt(v: unknown): string | null {
   return cps.length <= 300 ? s : cps.slice(0, 300).join('') + '…'
 }
 
-/** Verbatim port of drift_summary.py `is_sens`: before_sensitive/after_sensitive
- *  mirror the value shape; True (or a non-empty nested dict/list) → mask. */
+/** The canonical `isSens`: before_sensitive/after_sensitive mirror the value
+ *  shape; true (or a non-empty nested object/array) → mask. */
 export function isSens(sens: unknown, k: string): boolean {
   if (typeof sens !== 'object' || sens === null || Array.isArray(sens)) {
     return pyBool(sens)
@@ -225,8 +231,8 @@ function projectModuleCall(v: unknown): ModuleCallProvenance {
 }
 
 /** Forwards `configuration.root_module.module_calls` for the optional
- *  module-provenance field the backend accepts on dispatched runs. Not part of
- *  drift_summary.py (which omits provenance); orthogonal to the summary.
+ *  module-provenance field the backend accepts on dispatched runs. Orthogonal to
+ *  the summary, and not part of the count/skip semantics above.
  *
  *  The plan's `configuration` block carries NO terraform sensitivity metadata —
  *  before_sensitive/after_sensitive exist only inside `resource_changes` — so
