@@ -12,10 +12,11 @@ cannot diverge:
 
 - [`terraform-drift-report`](https://github.com/sethbacon/terraform-drift-report) — the GitHub Action
 - the Azure DevOps `TerraformDriftReport` task (`azure-pipelines-terraform`, initiative 6)
-- kept in lockstep with the backend's Go `internal/services/driftingest` and the
-  jq in the dispatched CI templates, via the vendored golden fixtures. This
-  package — `src/summarize.ts` plus `__tests__/` — is the authority those two are
-  diffed against.
+- mirrored by the backend's Go `internal/services/driftingest` and the jq in the
+  dispatched CI templates. This package — `src/summarize.ts` plus `__tests__/` —
+  is the authority those two are diffed against, **by hand**: there is no shared
+  fixture set and no automated conformance run. See
+  [cross-implementation status](#cross-implementation-status).
 
 ## Install
 
@@ -41,6 +42,14 @@ built it. No registry auth is needed to install it.
 > `github:sethbacon/terraform-drift-contract#v1.0.0`, which is why an earlier
 > revision of this note said fixes did not reach them. `dist/` stays committed
 > so the git form keeps working for anything not yet migrated.
+>
+> **If you must use the git form, pin a commit SHA, not a tag.** A git tag is
+> mutable and the tags here are unsigned and unprotected, so
+> `github:4cloudguru/terraform-drift-contract#v1.1.0` can be repointed at
+> different code with no npm publish, no provenance and no signature to check
+> against — in a package two CI systems execute. `#<full-40-char-sha>` is
+> immutable. The npm package above is the supported channel and the only one
+> that carries provenance.
 
 ## API
 
@@ -65,9 +74,15 @@ const r: Result = summarize(plan)
   (300 code-point truncation, U+2026 marker) and masked to the literal
   `"(sensitive)"` when **either** `before_sensitive` **or** `after_sensitive`
   marks them (terraform `-json` does **not** pre-mask — masking happens here,
-  before `fmt()`, so secrets never reach the formatter). The union landed in
-  v1.1.0 and is now matched by the other implementations — see
-  [cross-implementation status](#cross-implementation-status);
+  before `fmt()`, so a marked secret never reaches the formatter). The union
+  landed in v1.1.0 and is now matched by the other implementations — see
+  [cross-implementation status](#cross-implementation-status).
+  **Two preconditions, both real:** masking is applied *per top-level changed
+  key* and is driven *entirely* by `before_sensitive`/`after_sensitive`. A
+  secret nested under an unmarked top-level key is serialised whole, and a plan
+  that omits the sensitivity mirrors gets no masking at all for that resource.
+  Do not treat this as a redaction guarantee for plans of unknown or untrusted
+  provenance — see [SECURITY.md](SECURITY.md);
 - `drifted` = `(added + changed + destroyed) > 0` (a pure replace has
   `changed == 0` but `drifted == true`; do not infer "no drift" from
   `changed == 0`).
@@ -129,10 +144,20 @@ cross-implementation obligation.
 
 ## Contract
 
-The fixtures in `__tests__/fixtures/*.json` are vendored from the backend's
-`driftingest` tests; the asserted numbers match
-`internal/services/driftingest/plan_test.go`. **If the backend semantics change,
-update the fixtures here in the same change** — every consumer pulls from here.
+`__tests__/` is this package's vector set, and this package is the authority.
+**If the semantics change here, update the mirrors in the same change** — every
+consumer pulls from here.
+
+> **The fixtures are not shared, and nothing verifies parity automatically.** An
+> earlier revision of this section said they were "vendored from the backend's
+> `driftingest` tests". They are not: the Go package is `plan.go` +
+> `plan_test.go` with inline JSON and no `testdata` directory, and the counts
+> vectors were re-typed rather than shared — the two sides already use different
+> resources for the `attrs` case (`aws_instance.tweak` here,
+> `aws_db.x` there). No CI job in any of the three repositories runs the Go or jq
+> summarizer over these files, so a divergence introduced on either side is
+> green everywhere. Building a real conformance runner is tracked in
+> [#22](https://github.com/4cloudguru/terraform-drift-contract/issues/22).
 
 ## Development
 
