@@ -1,7 +1,7 @@
 {
   "name": "@4cloudguru/terraform-drift-contract",
   "version": "1.1.1",
-  "description": "Shared parser for Terraform/OpenTofu plan JSON → TSM drift counts + summary. One source of truth for the GitHub Action, the Azure DevOps task, and the backend's driftingest semantics.",
+  "description": "Shared parser for Terraform/OpenTofu plan JSON \u2192 TSM drift counts + summary. One source of truth for the GitHub Action, the Azure DevOps task, and the backend's driftingest semantics.",
   "license": "Apache-2.0",
   "private": false,
   "publishConfig": {
@@ -21,12 +21,14 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run --coverage",
     "lint": "tsc --noEmit",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@types/node": "^24",
+    "@vitest/coverage-v8": "^4.1.10",
     "typescript": "^5.6.0",
     "vitest": "^4.1.9"
   }
