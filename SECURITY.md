@@ -92,7 +92,12 @@ The semantics are **defined here** and mirrored by three implementations:
 
 `src/summarize.ts` plus its test vectors **is** the authority: it is what the
 other two are diffed against, and the only artifact a disagreement can be
-settled with. Earlier revisions of this document, of the README and of the
+settled with. That diffing is mechanised by
+[`conformance/vectors.json`](conformance/) — 53 vectors run by all three
+implementations and compared byte-for-byte, with each side pinning the same
+SHA-256 of the corpus file and the same digest over its own rendered results. A
+difference that is real and deliberate is **stated in the vector**; a difference
+with no entry there is a regression. Earlier revisions of this document, of the README and of the
 sources named a Python `drift_summary.py` as "the canonical dispatch
 summarizer". No such file exists — not in this repository, not in
 `terraform-state-manager-backend`, not anywhere in the suite's history — so for
@@ -132,29 +137,46 @@ Both divergences this document previously tracked as open are **closed**.
   rather than opening one. It is the one behavioural change in that batch and
   reaches consumers only on the next release.
 
-Cross-implementation differences that remain. All are **pre-existing**, none is a
-redaction gap, and none involves a value being emitted less masked than it is
-here:
+- **The serialized byte form is reconciled.** Keys sort by code point in every
+  emitted key set (`stableStringify`, the `attrs` union, and the `module_calls`
+  names), U+2028 and U+2029 are escaped in serialized values, `<`/`>`/`&` are
+  emitted raw, and negative zero emits `-0`. The Go mirror moved on the HTML
+  escaping (it now serialises through an encoder with `SetEscapeHTML(false)`)
+  and this package moved on the other three; each direction was chosen because
+  the other side could not be made to follow. Every point has a conformance
+  vector. Closes the residual formerly tracked as
+  [#17](https://github.com/4cloudguru/terraform-drift-contract/issues/17).
+- **The jq summary and `drifted` are reconciled.** The dispatched templates now
+  skip exactly `["read"]` as well as exactly `["no-op"]`, ignore a JSON `null`
+  entry rather than emitting a `{address: null, actions: null}` row, and compute
+  `drifted` from the counts instead of `terraform plan -detailed-exitcode` —
+  which returns 2 for an output-only diff and made the two producers disagree
+  about whether an environment had drifted. Closes
+  [#20](https://github.com/4cloudguru/terraform-drift-contract/issues/20) and
+  [#21](https://github.com/4cloudguru/terraform-drift-contract/issues/21).
+
+Cross-implementation differences that remain. Both are **pre-existing**, both are
+stated per vector in the corpus, neither is a redaction gap, and neither involves
+a value being emitted less masked than it is here:
 
 1. **`actions: null` vs `actions: []`.** For a `resource_changes` entry with no
    `actions` key at all, Go marshals its nil `[]string` as `null` where this
    package emits `[]`. Terraform always writes `actions`, so this reaches only a
    hand-built or malformed plan — but a `null` in a stored summary is a real
    shape difference for a consumer that iterates it.
-2. **A malformed `configuration` costs the whole plan in Go.**
-   `driftingest.Plan` types `module_calls` as a map of structs, so a plan where a
-   module call is an array (or `module_calls` is a string) fails
+   Corpus: `shape/no-actions-key`.
+2. **A malformed document costs the whole plan in Go.** `driftingest.Plan` types
+   `address` as a string, `actions` as `[]string` and `module_calls` as a map of
+   structs, so a plan carrying the wrong type in any of them fails
    `json.Unmarshal` and `/drift/ingest` answers 422, discarding an otherwise
-   valid summary. This package coerces to `{}` and summarizes normally. Go's
-   behaviour is fail-closed, so it is an availability/shape difference, not a
-   disclosure.
-3. **The jq `SUMMARY` and `DRIFTED` differ from the stated contract.**
-   `select(.change.actions != ["no-op"])` excludes only no-op, so a resource with
-   `actions: ["read"]` appears in a dispatched summary where this package and Go
-   skip it (counts are unaffected — a read contains no create/update/delete).
-   And `DRIFTED` is the plan's `-detailed-exitcode` (`[ "$PLAN_EXIT" = "2" ]`)
-   rather than `(added + changed + destroyed) > 0`. Defensible — arguably more
-   authoritative — but a divergence from what this document specifies.
+   valid summary. This package coerces and summarizes normally. Go's behaviour is
+   fail-closed, so it is an availability/shape difference, not a disclosure — and
+   it is the only implementation that tells the operator the document was
+   malformed at all (see the note on
+   [#31](https://github.com/4cloudguru/terraform-drift-contract/issues/31)
+   finding 43 below).
+   Corpus: `shape/non-string-address`, `shape/resource-changes-not-an-array`,
+   `shape/actions-not-an-array`.
 
 ### Known residuals that need a spec change, not a one-sided edit
 
@@ -164,23 +186,18 @@ the other implementations are diffed against. Fixing any of them one-sidedly
 creates exactly the divergence this document exists to prevent. Each needs a
 decision recorded across all implementations first:
 
-- **Serialized byte form is JS-native, not a shared canonical form**
-  ([#17](https://github.com/4cloudguru/terraform-drift-contract/issues/17)).
-  Non-ASCII is emitted raw, keys sort by UTF-16 code unit (so an above-BMP key
-  sorts before U+FFFF, where a code-point sort puts it after), and U+2028/U+2029
-  are not escaped. Go agrees on the first two and additionally HTML-escapes
-  `<`, `>` and `&`. Because escaped forms are longer, the 300-code-point
-  truncation also lands at a different offset, so two implementations can retain
-  *different* content from the same attribute. `stableStringify`'s comment used
-  to claim `json.dumps(sort_keys=True)` parity; that claim was false and has been
-  replaced with the list of actual differences.
 - **Numbers are IEEE-754 doubles**
   ([#18](https://github.com/4cloudguru/terraform-drift-contract/issues/18)).
   `JSON.parse` collapses integers past 2^53, so two distinct 20-digit serials
   compare equal and the changed attribute is dropped from `attrs` silently.
-  Whole floats (`2.0` → `2`) and `-0` also normalise. Go unmarshals into
-  `interface{}` and hits the same ceiling, so **TS and Go agree today**; the fix
-  is a parse-boundary change in the consumers, not an edit here.
+  Go unmarshals into `interface{}` and hits the same ceiling, so **TS and Go
+  agree**, and that agreement is now pinned by the corpus vector
+  `serialize/integers-past-2-53-collapse` rather than assumed. This is the one
+  part of #18 that is not fixable here: by the time `summarize()` sees the plan,
+  the two serials are already the same double. Changing it means parsing the plan
+  with a numeric-literal-preserving reader in **every** consumer, which is a
+  parse-boundary decision, not an edit inside this package. The formatting halves
+  of #18 (whole floats, negative zero) are fixed and have vectors.
 - **Nothing bounds the summary**
   ([#14](https://github.com/4cloudguru/terraform-drift-contract/issues/14)).
   `fmt()`'s 300-code-point cap is per value; there is no cap on entries, on
