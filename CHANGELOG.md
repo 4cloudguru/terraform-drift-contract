@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.2.0](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.1.1...v1.2.0) (2026-08-14)
+
+
+### Features
+
+* bound the summary, stop the serializer throwing, and say what was not done ([#49](https://github.com/4cloudguru/terraform-drift-contract/issues/49)) ([a7749fb](https://github.com/4cloudguru/terraform-drift-contract/commit/a7749fbc1c210eeab155c6b69a0373edda038c23)), closes [#10](https://github.com/4cloudguru/terraform-drift-contract/issues/10) [#11](https://github.com/4cloudguru/terraform-drift-contract/issues/11) [#14](https://github.com/4cloudguru/terraform-drift-contract/issues/14)
+
+
+### Bug Fixes
+
+* read plan objects as own properties, and pin the masking control's failure modes ([#43](https://github.com/4cloudguru/terraform-drift-contract/issues/43)) ([216c9ec](https://github.com/4cloudguru/terraform-drift-contract/commit/216c9ec37ff8f1957a12e1149f7c72da43b395ff)), closes [#27](https://github.com/4cloudguru/terraform-drift-contract/issues/27) [#28](https://github.com/4cloudguru/terraform-drift-contract/issues/28) [#30](https://github.com/4cloudguru/terraform-drift-contract/issues/30) [#32](https://github.com/4cloudguru/terraform-drift-contract/issues/32) [#33](https://github.com/4cloudguru/terraform-drift-contract/issues/33) [#34](https://github.com/4cloudguru/terraform-drift-contract/issues/34)
+* reconcile the serialized byte form and land a shared conformance corpus ([#48](https://github.com/4cloudguru/terraform-drift-contract/issues/48)) ([94e268c](https://github.com/4cloudguru/terraform-drift-contract/commit/94e268c31f068e1e1effe44d97e535636a646ef7))
+
 ## [1.1.1](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.1.0...v1.1.1) (2026-08-13)
 
 
