@@ -14,8 +14,9 @@ cannot diverge:
 - the Azure DevOps `TerraformDriftReport` task (`azure-pipelines-terraform`, initiative 6)
 - mirrored by the backend's Go `internal/services/driftingest` and the jq in the
   dispatched CI templates. This package — `src/summarize.ts` plus `__tests__/` —
-  is the authority those two are diffed against, **by hand**: there is no shared
-  fixture set and no automated conformance run. See
+  is the authority those two are diffed against, and the diffing is done by the
+  shared [conformance corpus](conformance/): 53 vectors that all three
+  implementations run and compare byte-for-byte. See
   [cross-implementation status](#cross-implementation-status).
 
 ## Install
@@ -145,6 +146,8 @@ CI templates:
 | --- | --- |
 | An attribute marked sensitive on **one** side only (config-derived marks apply to the planned value only, so this is routine) → **both** sides `"(sensitive)"` | reconciled with Go in [backend#374](https://github.com/sethbacon/terraform-state-manager-backend/pull/374); the jq path has no `attrs` to mask |
 | `module_calls` provenance projected + credential-scrubbed + capped (above) | both jq templates project identically as of [backend#374](https://github.com/sethbacon/terraform-state-manager-backend/pull/374) |
+| Byte-level serialized form — code-point key order, U+2028/U+2029 escaped, `<`/`>`/`&` raw, `-0` | reconciled by the corpus ([#17](https://github.com/4cloudguru/terraform-drift-contract/issues/17), [#18](https://github.com/4cloudguru/terraform-drift-contract/issues/18)) |
+| jq skips `["read"]`, and `drifted` comes from the counts | reconciled in the backend ([#20](https://github.com/4cloudguru/terraform-drift-contract/issues/20), [#21](https://github.com/4cloudguru/terraform-drift-contract/issues/21)) |
 
 Neither behaviour changes counting or skip semantics, and neither changes the
 symmetric case (both mirrors marking the key, or neither): those stay
@@ -153,12 +156,18 @@ unmasked — that is the shape of a plan with no sensitivity metadata at all, an
 masking it would mask every attribute of every such plan; this is asserted in
 the class test so it cannot change silently.
 
-Three differences do remain — `actions: null` vs `[]` on a plan with no
-`actions` key, Go answering 422 for a malformed `configuration` where this
-package tolerates it, and the jq `SUMMARY` not skipping `["read"]` while taking
-`drifted` from the plan's exit code. All three are pre-existing and **none is a
-redaction gap**. See [SECURITY.md](SECURITY.md) for the detail and for the
-cross-implementation obligation.
+The serialized byte form is reconciled too, as of the corpus: keys sort by code
+point everywhere, U+2028/U+2029 are escaped, `<`/`>`/`&` stay raw (the Go mirror
+serialises with `SetEscapeHTML(false)`), and negative zero emits `-0`. The jq
+`SUMMARY` now skips `["read"]` and takes `drifted` from the counts rather than
+from `terraform plan -detailed-exitcode`.
+
+What still differs is **stated in the corpus, per vector**: Go rejects a
+malformed document at its unmarshal boundary where this package tolerates it
+(fail-closed, a 422 rather than a wrong answer), and Go marshals a nil action
+list as `null` where this package emits `[]`. Neither is a redaction gap. See
+[SECURITY.md](SECURITY.md) for the detail and for the cross-implementation
+obligation.
 
 > **Note.** Earlier revisions of this README named a Python `drift_summary.py` as
 > the file these semantics must match. No such file exists anywhere in the suite.
@@ -170,22 +179,26 @@ cross-implementation obligation.
 **If the semantics change here, update the mirrors in the same change** — every
 consumer pulls from here.
 
-> **The fixtures are not shared, and nothing verifies parity automatically.** An
-> earlier revision of this section said they were "vendored from the backend's
-> `driftingest` tests". They are not: the Go package is `plan.go` +
-> `plan_test.go` with inline JSON and no `testdata` directory, and the counts
-> vectors were re-typed rather than shared — the two sides already use different
-> resources for the `attrs` case (`aws_instance.tweak` here,
-> `aws_db.x` there). No CI job in any of the three repositories runs the Go or jq
-> summarizer over these files, so a divergence introduced on either side is
-> green everywhere. Building a real conformance runner is tracked in
-> [#22](https://github.com/4cloudguru/terraform-drift-contract/issues/22).
+`__tests__/fixtures/` are this package's own unit fixtures. The **shared** set —
+the one the mirrors run — is [`conformance/vectors.json`](conformance/), and it
+is the artifact a disagreement gets settled with. Each implementation pins the
+same SHA-256 of that file and the same digest over its own rendered results, so
+a divergence reddens both repositories without either CI job needing to run the
+other language. Differences that are real and deliberate are **stated per
+vector**; a difference with no entry there is a regression. See
+[`conformance/README.md`](conformance/README.md) for the procedure when the
+semantics change.
+
+> An earlier revision of this section said the fixtures were "vendored from the
+> backend's `driftingest` tests", and the correction that replaced it said
+> nothing verified parity automatically. Both are superseded by the corpus
+> ([#22](https://github.com/4cloudguru/terraform-drift-contract/issues/22)).
 
 ## Development
 
 ```bash
 npm install
-npm test              # vitest contract tests
+npm test              # vitest contract tests + the conformance corpus
 npm run test:coverage # the same run, gated on the thresholds in vitest.config.mts
 npm run lint          # tsc --noEmit
 npm run build         # tsc → dist/  (commit the result)

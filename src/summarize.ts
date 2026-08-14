@@ -97,25 +97,65 @@ function pyBool(v: unknown): boolean {
   return Boolean(v)
 }
 
+/** Orders two strings by CODE POINT, not by UTF-16 code unit.
+ *
+ *  `Array.prototype.sort()`'s default comparator compares code units, so a
+ *  surrogate pair (lead unit 0xD800–0xDBFF) sorts *below* every unpaired unit
+ *  from 0xE000 up: `["￿", "\u{1F600}"].sort()` puts the emoji first, where
+ *  a code-point sort puts it last. The Go mirror sorts map keys as UTF-8 bytes
+ *  and jq sorts by code point — both of which ARE code-point order — so the
+ *  default comparator was the one implementation out of three, and map keys are
+ *  attacker-influenceable (a `tags` block with an emoji key is legal HCL). This
+ *  is the sort used everywhere a key set is emitted. */
+function compareCodePoints(a: string, b: string): number {
+  const ai = a[Symbol.iterator]()
+  const bi = b[Symbol.iterator]()
+  for (;;) {
+    const x = ai.next()
+    const y = bi.next()
+    if (x.done) return y.done ? 0 : -1
+    if (y.done) return 1
+    if (x.value !== y.value) {
+      return (x.value.codePointAt(0) as number) < (y.value.codePointAt(0) as number) ? -1 : 1
+    }
+  }
+}
+
+/** A JSON string literal, with U+2028/U+2029 escaped.
+ *
+ *  `JSON.stringify` leaves LINE SEPARATOR and PARAGRAPH SEPARATOR raw; Go's
+ *  `encoding/json` escapes both unconditionally, and unlike its HTML escaping
+ *  there is no encoder flag to turn that off. Escaping here is therefore the
+ *  only direction that reconciles the two, and it is also the safer one: raw
+ *  U+2028 terminates a line in a JS context, so a value carrying one can break
+ *  out of a report embedded in a script. Applied to keys as well as values,
+ *  because Go escapes both. */
+function jsonString(s: string): string {
+  return JSON.stringify(s).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
+}
+
 /** Deterministic JSON with sorted keys and compact separators.
  *
- *  This is JS-native JSON with the keys sorted — NOT a reproduction of any other
- *  language's serializer. An earlier revision of this comment claimed it matched
+ *  This is the canonical serialized form for every non-string attribute value,
+ *  and it is what the Go `driftingest` mirror's `canon()` must reproduce
+ *  byte-for-byte. An earlier revision of this comment claimed it matched
  *  `json.dumps(v, separators=(",",":"), sort_keys=True)`; it does not, and the
- *  Python file that claim pointed at never existed (see SECURITY.md). The
- *  differences are real and observable, so they are written down here rather
- *  than asserted away:
- *    - non-ASCII is emitted RAW (`"café"`), where json.dumps defaults to
- *      ensure_ascii=True and would emit `"café"`;
- *    - keys sort by UTF-16 code unit, so an above-BMP key sorts before U+FFFF
- *      here and after it in a code-point sort;
- *    - U+2028/U+2029 are left raw;
- *    - Go's encoding/json HTML-escapes `<`, `>` and `&` by default; this does
- *      not.
- *  The Go `driftingest` mirror agrees with this implementation on the first two
- *  and differs on the last. Reconciling the byte-level form across the
- *  implementations is tracked in #17 and needs a spec change on all sides, not a
- *  one-sided edit here.
+ *  Python file that claim pointed at never existed (see SECURITY.md).
+ *
+ *  The form, written down so a porter can reproduce it rather than infer it:
+ *    - non-ASCII is emitted RAW (`"café"`), never `\uXXXX`-escaped;
+ *    - `<`, `>` and `&` are emitted RAW (Go's encoding/json HTML-escapes them by
+ *      default, so the mirror must use an encoder with `SetEscapeHTML(false)`);
+ *    - U+2028 and U+2029 ARE escaped, in keys and in values (Go escapes them
+ *      unconditionally and offers no flag, so this side moved);
+ *    - keys sort by CODE POINT (see compareCodePoints);
+ *    - negative zero is emitted as `-0`, not `0`. `JSON.stringify(-0)` yields
+ *      `"0"`, which both loses the sign Terraform reported and makes `0` and
+ *      `-0` compare EQUAL here while the Go mirror reports them as a change;
+ *    - numbers are otherwise JS/Go shortest-round-trip doubles, which agree —
+ *      including the >2^53 collapse (#18), verified across the corpus.
+ *  Every one of those points has a conformance vector; the byte-level agreement
+ *  with the mirror is asserted by the conformance runner, not by this comment.
  *
  *  `undefined` canonicalises to `"null"`, matching the Go mirror's `canon()`,
  *  which maps both an absent key and an explicit null to `"null"` — without it
@@ -123,10 +163,12 @@ function pyBool(v: unknown): boolean {
  *  runtime lie. */
 function stableStringify(v: unknown): string {
   if (v === undefined) return 'null'
+  if (typeof v === 'string') return jsonString(v)
+  if (Object.is(v, -0)) return '-0'
   if (v === null || typeof v !== 'object') return JSON.stringify(v)
   if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']'
-  const keys = Object.keys(v as object).sort()
-  return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify((v as Record<string, unknown>)[k])).join(',') + '}'
+  const keys = Object.keys(v as object).sort(compareCodePoints)
+  return '{' + keys.map((k) => jsonString(k) + ':' + stableStringify((v as Record<string, unknown>)[k])).join(',') + '}'
 }
 
 /** The 300-code-point cap, split out so a caller that has already computed a
@@ -242,7 +284,10 @@ export function summarize(plan: Plan | null | undefined): Result {
       const bObj = before as Record<string, unknown>
       const aObj = after as Record<string, unknown>
       const attrs: AttrChange[] = []
-      for (const k of Array.from(new Set([...Object.keys(bObj), ...Object.keys(aObj)])).sort()) {
+      // Code-point order, not the default code-unit order: this is the order the
+      // `attrs` array is emitted in, and the Go mirror's `sortedUnion` sorts
+      // UTF-8 bytes — which is code-point order. See compareCodePoints.
+      for (const k of Array.from(new Set([...Object.keys(bObj), ...Object.keys(aObj)])).sort(compareCodePoints)) {
         // The key set is the UNION, so one side is routinely missing the key —
         // and a bare `[k]` read on that side walks its prototype chain. For every
         // ordinary key that is undefined either way; for the literal key
@@ -363,7 +408,10 @@ export function moduleCallsPlan(plan: Plan | null | undefined): unknown {
     typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
   // Null-prototype: a module named "__proto__" must land as an own property.
   const module_calls = Object.create(null) as Record<string, ModuleCallProvenance>
-  const names = Object.keys(calls).sort()
+  // Code-point order, matching the jq mirror: jq's `keys` sorts by code point,
+  // so an above-BMP module name ordered differently here than in the dispatched
+  // payload for the identical plan. See compareCodePoints.
+  const names = Object.keys(calls).sort(compareCodePoints)
   let truncated = names.length > MAX_MODULE_CALLS
   for (const name of names.slice(0, MAX_MODULE_CALLS)) {
     const key = fmt(name) as string
