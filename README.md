@@ -56,10 +56,32 @@ built it. No registry auth is needed to install it.
 ```ts
 import { summarize, moduleCallsPlan, type Plan, type Result } from '@4cloudguru/terraform-drift-contract'
 
+// `Plan` is a compile-time DESCRIPTION of the document, not a runtime check —
+// TypeScript interfaces are erased, so every field is `unknown` at run time no
+// matter what the annotation says. That is fine here, and deliberately so: the
+// plan is attacker-influenceable on a fork PR, and `summarize()` normalises
+// every field it reads at the loop head rather than trusting the declared type.
+// No separate validator is exported, because a second notion of "valid" would
+// be one more thing the four implementations have to agree on.
 const plan: Plan = JSON.parse(fs.readFileSync('plan.json', 'utf8'))
 const r: Result = summarize(plan)
 // r = { added, changed, destroyed, drifted, summary: [{ address, actions }] }
 ```
+
+**Where this output goes, and why that matters.** Consumers POST `summary` (and
+`attrs`) to a TSM callback endpoint over the network, write it to a JSON report
+file on the runner, and echo part of it into the CI log. An unmasked `attrs`
+value — up to 300 code points of plaintext whenever the sensitivity mirrors are
+absent, or whenever the secret sits below an unmarked top-level key — is
+therefore transmitted, persisted and displayed, not merely held in memory. Read
+the masking semantics below with that in mind.
+
+`fmt` and `isSens` are exported alongside `summarize`/`moduleCallsPlan` and are
+part of the public contract: `fmt(v)` is the 300-code-point formatter described
+below and `isSens(mirror, key)` is the masking predicate. They are exported so a
+porter can check a mirror implementation against them value-by-value, and the
+publish workflow asserts all four are present on the CJS entry point. The same
+truncation and masking caveats apply to them as to `attrs`.
 
 ### Semantics (the authority the other implementations mirror)
 
@@ -163,10 +185,16 @@ consumer pulls from here.
 
 ```bash
 npm install
-npm test        # vitest contract tests
-npm run lint    # tsc --noEmit
-npm run build   # tsc → dist/  (commit the result)
+npm test              # vitest contract tests
+npm run test:coverage # the same run, gated on the thresholds in vitest.config.mts
+npm run lint          # tsc --noEmit
+npm run build         # tsc → dist/  (commit the result)
 ```
+
+CI runs `test:coverage`, not `test`. Every gap this suite has had was an
+untested branch — the fail-open masking path, the asymmetric key path, the
+prototype-chain read — so the thresholds sit just under the current numbers and
+only ever move up.
 
 `dist/` is committed and CI fails if it is stale, so a source change that is not
 rebuilt in the same commit does not merge.

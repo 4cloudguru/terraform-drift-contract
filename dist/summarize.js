@@ -98,16 +98,10 @@ function stableStringify(v) {
     const keys = Object.keys(v).sort();
     return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify(v[k])).join(',') + '}';
 }
-/** Deep equality for JSON values (key order independent), matching python `==`. */
-function jsonEqual(a, b) {
-    return stableStringify(a) === stableStringify(b);
-}
-/** The canonical `fmt`: strings pass through raw, everything else is compact
- *  sorted JSON; truncate past 300 code points with U+2026. */
-function fmt(v) {
-    if (v === null || v === undefined)
-        return null;
-    const s = typeof v === 'string' ? v : stableStringify(v);
+/** The 300-code-point cap, split out so a caller that has already computed a
+ *  value's canonical form can reach the truncation without serialising it a
+ *  second time. The public `fmt` below is unchanged in behaviour. */
+function truncate(s) {
     // A UTF-16 length <= 300 implies a code-point length <= 300 (a code point is
     // never fewer than one unit), so this returns exactly what the path below
     // would — without allocating one JS string per code point for a value we are
@@ -122,14 +116,43 @@ function fmt(v) {
     const cps = Array.from(s.slice(0, 1200)); // code points, not UTF-16 units
     return cps.length <= 300 ? s : cps.slice(0, 300).join('') + '…';
 }
+/** The canonical `fmt`: strings pass through raw, everything else is compact
+ *  sorted JSON; truncate past 300 code points with U+2026. */
+function fmt(v) {
+    if (v === null || v === undefined)
+        return null;
+    return truncate(typeof v === 'string' ? v : stableStringify(v));
+}
+/** `fmt` for a value whose `stableStringify` form the caller already has.
+ *  Identical output to `fmt(v)` by construction — the only difference is that it
+ *  does not serialise `v` again. */
+function fmtCanon(v, canon) {
+    if (v === null || v === undefined)
+        return null;
+    return truncate(typeof v === 'string' ? v : canon);
+}
 /** The canonical `isSens`: before_sensitive/after_sensitive mirror the value
  *  shape; true (or a non-empty nested object/array) → mask. */
 function isSens(sens, k) {
     if (typeof sens !== 'object' || sens === null || Array.isArray(sens)) {
         return pyBool(sens);
     }
+    // hasOwnProperty, not a bare read: `sens[k]` consults Object.prototype, so any
+    // other package sharing the process can influence the central predicate of a
+    // redaction control by writing to it. Verified before and after: pollution can
+    // only ever OVER-mask here, because an own JSON property always shadows an
+    // inherited one — so this is hardening, not a disclosure fix. A redaction
+    // predicate should still not be one prototype read away from another
+    // package's state, and both consumers bundle this alongside other code.
+    if (!Object.prototype.hasOwnProperty.call(sens, k))
+        return false;
     const sv = sens[k];
     return sv === true || (typeof sv === 'object' && sv !== null && pyBool(sv));
+}
+/** An own-property read. A bare `o[k]` walks the prototype chain, which for the
+ *  literal key `__proto__` yields Object.prototype instead of undefined. */
+function own(o, k) {
+    return Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined;
 }
 function has(actions, action) {
     return Array.isArray(actions) && actions.includes(action);
@@ -185,7 +208,27 @@ function summarize(plan) {
             const aObj = after;
             const attrs = [];
             for (const k of Array.from(new Set([...Object.keys(bObj), ...Object.keys(aObj)])).sort()) {
-                if (jsonEqual(bObj[k], aObj[k]))
+                // The key set is the UNION, so one side is routinely missing the key —
+                // and a bare `[k]` read on that side walks its prototype chain. For every
+                // ordinary key that is undefined either way; for the literal key
+                // `__proto__` it returns Object.prototype, which serialises as `{}`. A
+                // removed `__proto__` attribute therefore compared EQUAL to an empty
+                // object and was silently dropped from attrs, and a present one reported
+                // the counterpart as `"{}"` where the truthful answer is null. Own reads
+                // restore absent → null, which is also what the Go mirror's map lookup
+                // yields. Only reachable from a hand-crafted plan or a custom provider,
+                // but concealing a diff is the wrong direction to fail in.
+                const bv = own(bObj, k);
+                const av = own(aObj, k);
+                // Serialised once per side. The equality check used to stringify both
+                // values and throw both strings away, and `fmt` then stringified the same
+                // two values again — four full serialisations per differing key where two
+                // suffice, on the dominant cost of this library. Comparing the CANONICAL
+                // forms (not the raw strings) is what keeps the string "1" distinct from
+                // the number 1, exactly as the previous deep-equality check did.
+                const bCanon = stableStringify(bv);
+                const aCanon = stableStringify(av);
+                if (bCanon === aCanon)
                     continue;
                 // Union, not per-side: terraform applies a config-derived mark (a
                 // `sensitive = true` variable, sensitive(), a sensitive module output)
@@ -198,8 +241,8 @@ function summarize(plan) {
                 const sensitive = isSens(bs, k) || isSens(as_, k);
                 attrs.push({
                     name: k,
-                    before: sensitive ? '(sensitive)' : fmt(bObj[k]),
-                    after: sensitive ? '(sensitive)' : fmt(aObj[k]),
+                    before: sensitive ? '(sensitive)' : fmtCanon(bv, bCanon),
+                    after: sensitive ? '(sensitive)' : fmtCanon(av, aCanon),
                 });
             }
             if (attrs.length > 0)
