@@ -1,0 +1,31 @@
+---
+version: 2
+
+updates:
+  # Every dependency here is a devDependency, but they are the toolchain that
+  # COMPILES the dist/ two CI systems execute, and `npm ci` runs immediately
+  # before `npm run build` in the same workspace. Repository-level Dependabot
+  # *security* alerts only open a PR once an advisory exists; without this entry
+  # there is no version-update stream at all.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      dev-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    commit-message:
+      prefix: build(deps)
+      prefix-development: build(deps-dev)
+
+  # Without this the SHA pins in the workflows are frozen rather than
+  # maintained — pinning without an update path just converts "runs whatever the
+  # tag points at" into "runs a version that is never patched".
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci(deps)
