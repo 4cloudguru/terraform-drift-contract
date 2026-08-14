@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.1](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.1.0...v1.1.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* stop trusting the declared type of untrusted plan input, and retract the false parity claims ([#41](https://github.com/4cloudguru/terraform-drift-contract/issues/41)) ([6ef9204](https://github.com/4cloudguru/terraform-drift-contract/commit/6ef92043a95461c1e03ef00b4f806ffe7fec913a)), closes [#24](https://github.com/4cloudguru/terraform-drift-contract/issues/24) [#25](https://github.com/4cloudguru/terraform-drift-contract/issues/25)
+
+
+### Documentation
+
+* **security:** close the reconciled divergence and drop the drift_summary.py citation ([#38](https://github.com/4cloudguru/terraform-drift-contract/issues/38)) ([3b926ce](https://github.com/4cloudguru/terraform-drift-contract/commit/3b926ce0f0df0a934c496bee29e55541fb688099))
+
 ## [1.1.0](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.0.0...v1.1.0) (2026-08-13)
 
 
