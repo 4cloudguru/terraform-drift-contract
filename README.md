@@ -15,8 +15,8 @@ cannot diverge:
 - mirrored by the backend's Go `internal/services/driftingest` and the jq in the
   dispatched CI templates. This package — `src/summarize.ts` plus `__tests__/` —
   is the authority those two are diffed against, and the diffing is done by the
-  shared [conformance corpus](conformance/): 53 vectors that all three
-  implementations run and compare byte-for-byte. See
+  shared [conformance corpus](conformance/), which all three implementations run
+  and compare byte-for-byte. See
   [cross-implementation status](#cross-implementation-status).
 
 ## Install
@@ -66,8 +66,18 @@ import { summarize, moduleCallsPlan, type Plan, type Result } from '@4cloudguru/
 // be one more thing the four implementations have to agree on.
 const plan: Plan = JSON.parse(fs.readFileSync('plan.json', 'utf8'))
 const r: Result = summarize(plan)
-// r = { added, changed, destroyed, drifted, summary: [{ address, actions }] }
+// r = { added, changed, destroyed, drifted, summary: [{ address, actions }],
+//       unparseable, unmasked, truncated, omitted_entries, omitted_attrs }
+
+// Bounds are defaulted, not mandatory. Both defaults are declared in the shared
+// conformance corpus and asserted by every implementation.
+summarize(plan, { maxEntries: 500, maxAttrsPerEntry: 50 })
 ```
+
+**Do not read `drifted: false` as "verified clean" on its own.** `unparseable`
+is what separates a clean plan from a document that was never a plan — a
+truncated `terraform show -json`, the wrong file, a broken pipeline step. All of
+those used to produce the identical `drifted: false`.
 
 **Where this output goes, and why that matters.** Consumers POST `summary` (and
 `attrs`) to a TSM callback endpoint over the network, write it to a JSON report
@@ -108,7 +118,19 @@ truncation and masking caveats apply to them as to `attrs`.
   provenance — see [SECURITY.md](SECURITY.md);
 - `drifted` = `(added + changed + destroyed) > 0` (a pure replace has
   `changed == 0` but `drifted == true`; do not infer "no drift" from
-  `changed == 0`).
+  `changed == 0`);
+- `unparseable` = the document had no `resource_changes` array, so it was not a
+  plan. Distinct from `drifted`, and the field a CI gate should fail loud on;
+- `unmasked` = at least one non-skipped in-place change carried **neither**
+  sensitivity mirror, so nothing was masked for it (see the masking preconditions
+  above). Deliberately shape-based and slightly over-broad: it is the definition
+  all three implementations can compute identically, and over-warning is the
+  right direction for a redaction signal. A present-but-`false` mirror is
+  metadata and does not set it;
+- `truncated` / `omitted_entries` / `omitted_attrs` = a bound was reached, and by
+  how much, so a consumer can tell "no more drift" from "we stopped looking".
+  **The counts are never capped** — capping them would turn a payload bound into
+  a missed detection — so `drifted` stays truthful when the summary does not.
 
 ### Module provenance (`moduleCallsPlan`)
 

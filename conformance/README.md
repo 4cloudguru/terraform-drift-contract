@@ -29,6 +29,13 @@ literals that appear, identically, in both repositories:
   templates, which is the axis those two share (the dispatched summary carries
   no `attrs` at all).
 
+- **`limits`** — the contract's bounds on the summary (`max_entries`,
+  `max_attrs_per_entry`), declared here rather than in any one implementation.
+  Each side asserts its own constants against these numbers, so a bound cannot be
+  changed in one producer without the others. The tripping *behaviour* is tested
+  in each implementation's own suite: a 501-entry plan committed as a vector
+  would be 150 KB of noise.
+
 ## Stated differences
 
 A vector may carry a `go` or `jq` key recording a difference that is known and
@@ -48,6 +55,10 @@ A semantic change lands in all three implementations in the same batch:
 1. Edit `vectors.json` here and extend it to cover the new behaviour.
 2. Run `npm test`; take the new `CORPUS_SHA256`, `RECONCILED_DIGEST` and
    `PROVENANCE_DIGEST` from the failures and update `__tests__/conformance.test.ts`.
+   A vector's `expect` states only the **non-default** markers — `unparseable`,
+   `unmasked`, `truncated`, `omitted_entries` and `omitted_attrs` are filled from
+   the zero value by every runner, so a vector says what is interesting about it
+   rather than restating five zeroes.
 3. Copy `vectors.json` verbatim to
    `terraform-state-manager-backend/backend/internal/services/driftingest/testdata/conformance/vectors.json`
    and update the same three literals in `conformance_test.go` there. They must
