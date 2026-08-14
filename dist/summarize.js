@@ -44,10 +44,25 @@
 // mask — its summary is {address, actions} only. See SECURITY.md for the
 // differences that do remain, none of which is a redaction gap.
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.DEFAULT_MAX_ATTRS_PER_ENTRY = exports.DEFAULT_MAX_ENTRIES = void 0;
 exports.fmt = fmt;
 exports.isSens = isSens;
 exports.summarize = summarize;
 exports.moduleCallsPlan = moduleCallsPlan;
+/** Upper bounds on the summary. The 300-code-point cap in `fmt()` is per VALUE;
+ *  without these there is no cap on the number of entries, on attrs per entry,
+ *  or on total bytes, and the object below is what a consumer POSTs to the TSM
+ *  callback, writes to a file on the runner and stores as a drift record.
+ *  Measured before they existed: 1000 resources x 20 changed attrs produced a
+ *  12.3 MiB body; 5000 x 50 produced 153.6 MiB. Both are authorable in a
+ *  fork-PR config.
+ *
+ *  The numbers are part of the contract, not of this file: they are declared in
+ *  `conformance/vectors.json` under `limits`, and every implementation asserts
+ *  its own constants against that declaration. Changing one means changing the
+ *  corpus, which means changing all of them. */
+exports.DEFAULT_MAX_ENTRIES = 500;
+exports.DEFAULT_MAX_ATTRS_PER_ENTRY = 50;
 /** Python `bool(x)` truthiness (empty dict/list/string → false), unlike JS. */
 function pyBool(v) {
     if (v === null || v === undefined || v === false)
@@ -129,18 +144,70 @@ function jsonString(s) {
  *  this function returns the VALUE undefined and its `: string` signature is a
  *  runtime lie. */
 function stableStringify(v) {
-    if (v === undefined)
-        return 'null';
-    if (typeof v === 'string')
-        return jsonString(v);
-    if (Object.is(v, -0))
-        return '-0';
-    if (v === null || typeof v !== 'object')
-        return JSON.stringify(v);
-    if (Array.isArray(v))
-        return '[' + v.map(stableStringify).join(',') + ']';
-    const keys = Object.keys(v).sort(compareCodePoints);
-    return '{' + keys.map((k) => jsonString(k) + ':' + stableStringify(v[k])).join(',') + '}';
+    // ITERATIVE, not recursive, and that is the point rather than a style choice.
+    // The recursive form threw `RangeError: Maximum call stack size exceeded` at
+    // roughly 2,600 levels of object nesting and 3,124 of array nesting, out of
+    // summarize() and into the consumer's CI step, with no try/catch and no
+    // exported error type. JSON.parse accepts documents ~300x deeper, so there was
+    // a wide band in which a consumer parsed a plan successfully and then this
+    // library exploded — and the crash lands BEFORE the drift callback fires, so
+    // one deeply nested attribute value in a fork-PR config suppressed drift
+    // reporting for the whole run. That is a detection-evasion primitive against a
+    // security control, not a robustness nit.
+    //
+    // No depth LIMIT is imposed, deliberately: a limit needs the same number in
+    // every implementation, and the Go mirror's cap is encoding/json's own 10,000
+    // (which rejects the whole document at the unmarshal boundary, so /drift/ingest
+    // answers 422 rather than emitting a sentinel). Any invented limit here would
+    // agree with neither. What matters is that no depth can make this throw.
+    //
+    // The stack holds work items LIFO, so children are pushed in reverse to pop in
+    // order. Peak memory is O(nodes) rather than O(depth), which JSON.parse has
+    // already paid for the same document.
+    const out = [];
+    const stack = [{ val: v }];
+    while (stack.length > 0) {
+        const w = stack.pop();
+        if ('lit' in w) {
+            out.push(w.lit);
+            continue;
+        }
+        const x = w.val;
+        if (x === undefined) {
+            out.push('null');
+        }
+        else if (typeof x === 'string') {
+            out.push(jsonString(x));
+        }
+        else if (Object.is(x, -0)) {
+            out.push('-0');
+        }
+        else if (x === null || typeof x !== 'object') {
+            out.push(JSON.stringify(x));
+        }
+        else if (Array.isArray(x)) {
+            stack.push({ lit: ']' });
+            for (let i = x.length - 1; i >= 0; i--) {
+                stack.push({ val: x[i] });
+                if (i > 0)
+                    stack.push({ lit: ',' });
+            }
+            stack.push({ lit: '[' });
+        }
+        else {
+            const o = x;
+            const keys = Object.keys(o).sort(compareCodePoints);
+            stack.push({ lit: '}' });
+            for (let i = keys.length - 1; i >= 0; i--) {
+                stack.push({ val: o[keys[i]] });
+                stack.push({ lit: jsonString(keys[i]) + ':' });
+                if (i > 0)
+                    stack.push({ lit: ',' });
+            }
+            stack.push({ lit: '{' });
+        }
+    }
+    return out.join('');
 }
 /** The 300-code-point cap, split out so a caller that has already computed a
  *  value's canonical form can reach the truncation without serialising it a
@@ -205,11 +272,16 @@ function has(actions, action) {
 function isSkipped(actions) {
     return actions.length === 1 && (actions[0] === 'no-op' || actions[0] === 'read');
 }
-function summarize(plan) {
+function summarize(plan, options = {}) {
     const summary = [];
     let added = 0;
     let changed = 0;
     let destroyed = 0;
+    let unmasked = false;
+    let omittedEntries = 0;
+    let omittedAttrs = 0;
+    const maxEntries = options.maxEntries ?? exports.DEFAULT_MAX_ENTRIES;
+    const maxAttrsPerEntry = options.maxAttrsPerEntry ?? exports.DEFAULT_MAX_ATTRS_PER_ENTRY;
     // The plan is attacker-influenced JSON that has been through JSON.parse, not a
     // typed object: every field is `unknown` at runtime no matter what `Plan`
     // declares. Normalise the three fields this loop reads ONCE, here, so that
@@ -218,7 +290,14 @@ function summarize(plan) {
     // guarded it, so `{"length":1,"0":"no-op"}` was DROPPED from the summary
     // entirely, and a non-array `resource_changes` threw a raw TypeError out of
     // the library into the consumer's CI step.
-    const changes = Array.isArray(plan?.resource_changes) ? plan.resource_changes : [];
+    //
+    // Whether it IS an array is also the parse signal: a `terraform show -json`
+    // document always carries `resource_changes`, so its absence or wrong type
+    // means this is not a plan — the one thing summarize() can say truthfully
+    // about a document it could not read. See `Result.unparseable`.
+    const rawChanges = plan?.resource_changes;
+    const unparseable = !Array.isArray(rawChanges);
+    const changes = unparseable ? [] : rawChanges;
     for (const c of changes) {
         // A null or primitive entry is valid JSON; reading `.change` off it throws.
         if (c === null || typeof c !== 'object' || Array.isArray(c))
@@ -237,15 +316,37 @@ function summarize(plan) {
         const actions = Array.isArray(ch.actions) ? ch.actions.filter((a) => typeof a === 'string') : [];
         if (isSkipped(actions))
             continue;
+        // Counted BEFORE the entry cap, so a capped summary still reports drift
+        // truthfully: `drifted` and the counts are the security signal, the summary
+        // rows are the detail. Dropping a count to bound a payload would turn a size
+        // limit into a missed detection.
+        if (has(actions, 'create'))
+            added++;
+        if (has(actions, 'update'))
+            changed++;
+        if (has(actions, 'delete'))
+            destroyed++;
+        const before = ch.before;
+        const after = ch.after;
+        const inPlace = before !== null && typeof before === 'object' && !Array.isArray(before) &&
+            after !== null && typeof after === 'object' && !Array.isArray(after);
+        // Shape-based, and evaluated for capped entries too: this says "a change
+        // that would emit attribute values carried no sensitivity metadata at all",
+        // which is a property of the PLAN, not of how much of it fit in the summary.
+        // No `const` binding for the mirrors here — the guard below is the masking
+        // decision, and this is only a report about it.
+        if (inPlace && ch.before_sensitive == null && ch.after_sensitive == null)
+            unmasked = true;
+        if (summary.length >= maxEntries) {
+            omittedEntries++;
+            continue;
+        }
         // Type check only, deliberately NOT truncated: the address is the summary's
         // primary key — how a drift record is matched to a resource by the backend,
         // the Action and the ADO task — so capping it would break record identity.
         // That residual is documented in SECURITY.md.
         const item = { address: typeof c.address === 'string' ? c.address : '', actions };
-        const before = ch.before;
-        const after = ch.after;
-        if (before !== null && typeof before === 'object' && !Array.isArray(before) &&
-            after !== null && typeof after === 'object' && !Array.isArray(after)) {
+        if (inPlace) {
             const bs = ch.before_sensitive ?? {};
             const as_ = ch.after_sensitive ?? {};
             const bObj = before;
@@ -277,6 +378,13 @@ function summarize(plan) {
                 const aCanon = stableStringify(av);
                 if (bCanon === aCanon)
                     continue;
+                // Past the cap the key is still known to have CHANGED — the diff above
+                // has already run — so it is counted, not concealed. Only the formatting
+                // is skipped, which is the expensive half.
+                if (attrs.length >= maxAttrsPerEntry) {
+                    omittedAttrs++;
+                    continue;
+                }
                 // Union, not per-side: terraform applies a config-derived mark (a
                 // `sensitive = true` variable, sensitive(), a sensitive module output)
                 // to the PLANNED value only — it is never persisted to state — so a
@@ -296,14 +404,19 @@ function summarize(plan) {
                 item.attrs = attrs;
         }
         summary.push(item);
-        if (has(actions, 'create'))
-            added++;
-        if (has(actions, 'update'))
-            changed++;
-        if (has(actions, 'delete'))
-            destroyed++;
     }
-    return { added, changed, destroyed, drifted: added + changed + destroyed > 0, summary };
+    return {
+        added,
+        changed,
+        destroyed,
+        drifted: added + changed + destroyed > 0,
+        summary,
+        unparseable,
+        unmasked,
+        truncated: omittedEntries > 0 || omittedAttrs > 0,
+        omitted_entries: omittedEntries,
+        omitted_attrs: omittedAttrs,
+    };
 }
 /** Upper bound on the top-level module calls forwarded as provenance. A root
  *  module with more direct calls than this is pathological; the overflow is

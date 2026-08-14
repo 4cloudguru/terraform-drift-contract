@@ -356,3 +356,150 @@ describe('defect class: bounded work on unbounded input (fmt)', () => {
     expect(Date.now() - started).toBeLessThan(300)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Defect class 4: "one attacker-authored input makes the library produce no
+// answer, or an unboundedly large one."
+//
+// Both are detection failures rather than crashes-as-such. The recursion case
+// killed the step BEFORE the drift callback fired, so a single deeply nested
+// attribute value in a fork-PR config suppressed drift reporting for the entire
+// run. The unbounded case is the other end of the same axis: the returned object
+// is POSTed to a callback, written to a file on the runner and stored as a drift
+// record, so "no cap anywhere" is an unbounded request body and an unbounded row.
+//
+// Neither is expressible as a shared conformance vector — a 200,000-deep value
+// exceeds encoding/json's own nesting cap in the Go mirror, and a 501-entry plan
+// would be 150 KB of committed noise — so they live here, with the LIMITS
+// themselves declared in the corpus and asserted there.
+// ---------------------------------------------------------------------------
+describe('bounded output and unbounded input', () => {
+  const nestObj = (n: number) => {
+    let v: unknown = 1
+    for (let i = 0; i < n; i++) v = { a: v }
+    return v
+  }
+  const nestArr = (n: number) => {
+    let v: unknown = 1
+    for (let i = 0; i < n; i++) v = [v]
+    return v
+  }
+
+  it.each([
+    ['object', nestObj],
+    ['array', nestArr],
+  ])('serialises %s nesting far past the old RangeError without throwing', (_kind, nest) => {
+    // The recursive serializer threw at ~2,600 (objects) and ~3,124 (arrays);
+    // JSON.parse accepts ~300x deeper, so there was a wide band in which a
+    // consumer parsed the plan and then this library exploded. 200,000 is two
+    // orders of magnitude past both former limits.
+    for (const depth of [3000, 200_000]) {
+      const r = summarize({
+        resource_changes: [
+          { address: 'terraform_data.x', change: { actions: ['update'], before: { k: nest(depth) }, after: { k: 2 } } },
+        ],
+      } as Plan)
+      // Not merely "did not throw": the attribute is still reported, truncated
+      // to the same 301 code points any other oversized value gets.
+      expect(Array.from(r.summary[0].attrs![0].before!).length).toBe(301)
+    }
+  })
+
+  it('caps summary entries, keeps the COUNTS whole, and says how many it dropped', () => {
+    const plan = {
+      resource_changes: Array.from({ length: 503 }, (_, i) => ({
+        address: `aws_instance.a${i}`,
+        change: { actions: ['create'] },
+      })),
+    } as Plan
+    const r = summarize(plan)
+    expect(r.summary.length).toBe(500)
+    expect(r.omitted_entries).toBe(3)
+    expect(r.truncated).toBe(true)
+    // The counts are the security signal; capping them would turn a size limit
+    // into a missed detection.
+    expect(r.added).toBe(503)
+    expect(r.drifted).toBe(true)
+  })
+
+  it('caps attrs per entry and says how many it dropped, across entries', () => {
+    const wide = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`k${String(i).padStart(3, '0')}`, i]))
+    const bumped = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`k${String(i).padStart(3, '0')}`, i + 1]))
+    const plan = {
+      resource_changes: [
+        { address: 'aws_instance.a', change: { actions: ['update'], before: wide(60), after: bumped(60) } },
+        { address: 'aws_instance.b', change: { actions: ['update'], before: wide(55), after: bumped(55) } },
+      ],
+    } as Plan
+    const r = summarize(plan)
+    expect(r.summary[0].attrs!.length).toBe(50)
+    expect(r.summary[1].attrs!.length).toBe(50)
+    expect(r.omitted_attrs).toBe(15) // 10 + 5
+    expect(r.truncated).toBe(true)
+  })
+
+  it('honours caller-supplied limits, and reports nothing omitted when nothing is', () => {
+    const plan = {
+      resource_changes: [
+        { address: 'a.b', change: { actions: ['update'], before: { x: 1, y: 1 }, after: { x: 2, y: 2 } } },
+        { address: 'c.d', change: { actions: ['create'] } },
+      ],
+    } as Plan
+    const tight = summarize(plan, { maxEntries: 1, maxAttrsPerEntry: 1 })
+    expect(tight.summary.length).toBe(1)
+    expect(tight.summary[0].attrs!.length).toBe(1)
+    expect(tight.omitted_entries).toBe(1)
+    expect(tight.omitted_attrs).toBe(1)
+    expect(tight.truncated).toBe(true)
+    // …and the same plan under the defaults trips nothing, so `truncated` is
+    // never merely decorative.
+    const loose = summarize(plan)
+    expect(loose.truncated).toBe(false)
+    expect(loose.omitted_entries).toBe(0)
+    expect(loose.omitted_attrs).toBe(0)
+  })
+
+  it.each([
+    ['null', null],
+    ['an empty object', {}],
+    ['a non-object', 'not a plan'],
+    ['resource_changes: null', { resource_changes: null }],
+    ['resource_changes: a string', { resource_changes: 'oops' }],
+  ])('reports %s as unparseable rather than as a clean plan', (_name, input) => {
+    const r = summarize(input as Plan)
+    expect(r.unparseable).toBe(true)
+    expect(r.drifted).toBe(false)
+  })
+
+  it('a genuinely clean plan is NOT unparseable — the two are distinguishable', () => {
+    const r = summarize({ resource_changes: [] } as Plan)
+    expect(r.unparseable).toBe(false)
+    expect(r.drifted).toBe(false)
+  })
+
+  it('flags a change that emits values with no sensitivity metadata, and only that', () => {
+    const change = (extra: object) => ({
+      resource_changes: [
+        { address: 'a.b', change: { actions: ['update'], before: { pw: 'OLD' }, after: { pw: 'NEW' }, ...extra } },
+      ],
+    }) as Plan
+    // No mirrors at all: nothing was masked and nothing could have been.
+    expect(summarize(change({})).unmasked).toBe(true)
+    // A present-but-false mirror IS metadata: it says "not sensitive".
+    expect(summarize(change({ before_sensitive: false, after_sensitive: false })).unmasked).toBe(false)
+    expect(summarize(change({ before_sensitive: {}, after_sensitive: {} })).unmasked).toBe(false)
+    expect(summarize(change({ after_sensitive: { pw: true } })).unmasked).toBe(false)
+    // A skipped change emits no values, so it cannot emit them unmasked.
+    expect(
+      summarize({
+        resource_changes: [{ address: 'a.b', change: { actions: ['no-op'], before: { pw: 'OLD' }, after: { pw: 'OLD' } } }],
+      } as Plan).unmasked,
+    ).toBe(false)
+    // Neither can a create: before is null, so no attrs path is entered.
+    expect(
+      summarize({
+        resource_changes: [{ address: 'a.b', change: { actions: ['create'], before: null, after: { pw: 'NEW' } } }],
+      } as Plan).unmasked,
+    ).toBe(false)
+  })
+})

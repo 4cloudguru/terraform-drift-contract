@@ -36,9 +36,21 @@ describe('summarize — counts, skip rules, drifted', () => {
     expect(r.summary).toEqual([])
   })
 
-  it('is null-safe', () => {
-    const r = summarize(null)
-    expect(r).toEqual({ added: 0, changed: 0, destroyed: 0, drifted: false, summary: [] })
+  it('is null-safe, and says so rather than answering "clean"', () => {
+    // The whole Result, not a subset: a null input must not quietly acquire the
+    // shape of a verified-clean plan, which is what `unparseable` exists to say.
+    expect(summarize(null)).toEqual({
+      added: 0,
+      changed: 0,
+      destroyed: 0,
+      drifted: false,
+      summary: [],
+      unparseable: true,
+      unmasked: false,
+      truncated: false,
+      omitted_entries: 0,
+      omitted_attrs: 0,
+    })
   })
 })
 

@@ -51,6 +51,23 @@ pin moves — that is a property of the pin, not of a release.
 - **Emitted strings are bounded.** Every value that goes through `fmt()` is
   capped at 300 code points, and at most 100 module calls are emitted; an
   overflow sets `module_calls_truncated: true`.
+- **The summary itself is bounded, and says when it was.** At most 500 entries
+  and 50 changed attributes per entry, defaulted and caller-overridable;
+  `truncated`, `omitted_entries` and `omitted_attrs` report an overflow. The
+  **counts are deliberately not capped**, so `drifted` stays truthful when the
+  summary does not — a bound that suppressed a count would turn a payload limit
+  into a missed detection. Before this, 5000 resources x 50 attrs produced a
+  153.6 MiB callback body from a plan authorable on a fork PR.
+- **The serializer cannot be made to throw.** `stableStringify` is iterative. The
+  recursive form threw `RangeError` at ~2,600 levels of nesting, out of
+  `summarize()` and into the consumer's CI step — before the drift callback
+  fired, so one deeply nested attribute value suppressed drift reporting for the
+  whole run. No depth limit is imposed: a limit needs the same number in every
+  implementation, and the Go mirror's is `encoding/json`'s own 10,000, which
+  rejects the document at the unmarshal boundary rather than emitting a sentinel.
+- **A non-plan is distinguishable from a clean plan.** `unparseable` is set when
+  the document carries no `resource_changes` array. Consumers must not read
+  `drifted: false` as "verified clean" without it.
 
 Each of these guards is covered by a table-driven test whose rows were verified
 by inverting the guard and confirming the rows fail.
@@ -72,8 +89,15 @@ by inverting the guard and confirming the rows fail.
   values are emitted as-is. This is deliberate and fail-open: plans without
   sensitivity metadata are common, masking them would mask every attribute of
   every such plan, and it would diverge from all three other implementations in
-  the common case. The decision is pinned by an explicit test row so it cannot
-  change silently.
+  the common case. The decision is pinned by explicit test rows and by the
+  conformance vectors `masking/neither-mirror-is-fail-open` and
+  `masking/whole-value-mirror-false` so it cannot change silently.
+
+  What has changed is that the condition is now **reported**: `Result.unmasked`
+  is set when a non-skipped in-place change carried neither mirror, so the GitHub
+  Action and the ADO task can warn or fail the step, and an operator can tell
+  "nothing was sensitive" from "we had no sensitivity metadata". The behaviour is
+  unchanged; the silence is not.
 - **Nothing downstream of this package.** How a consumer stores, logs or renders
   the returned object is the consumer's responsibility. Vulnerabilities arising
   from misuse of this API belong to the consuming repository.
@@ -93,8 +117,8 @@ The semantics are **defined here** and mirrored by three implementations:
 `src/summarize.ts` plus its test vectors **is** the authority: it is what the
 other two are diffed against, and the only artifact a disagreement can be
 settled with. That diffing is mechanised by
-[`conformance/vectors.json`](conformance/) — 53 vectors run by all three
-implementations and compared byte-for-byte, with each side pinning the same
+[`conformance/vectors.json`](conformance/) — run by all three implementations
+and compared byte-for-byte, with each side pinning the same
 SHA-256 of the corpus file and the same digest over its own rendered results. A
 difference that is real and deliberate is **stated in the vector**; a difference
 with no entry there is a regression. Earlier revisions of this document, of the README and of the
@@ -198,23 +222,11 @@ decision recorded across all implementations first:
   with a numeric-literal-preserving reader in **every** consumer, which is a
   parse-boundary decision, not an edit inside this package. The formatting halves
   of #18 (whole floats, negative zero) are fixed and have vectors.
-- **Nothing bounds the summary**
-  ([#14](https://github.com/4cloudguru/terraform-drift-contract/issues/14)).
-  `fmt()`'s 300-code-point cap is per value; there is no cap on entries, on
-  attrs per entry, or on total bytes, and no counts-only mode. 5000 resources ×
-  50 attrs produced a 153 MiB callback body. Adding caps means adding truthful
-  truncation markers to the `Result` shape, which is an API and contract change
-  for every consumer and mirror.
-- **`stableStringify` recursion is unbounded**
-  ([#11](https://github.com/4cloudguru/terraform-drift-contract/issues/11)).
-  It throws `RangeError` at ~2500 levels of object nesting, out of
-  `summarize()` and into the consumer's CI step, suppressing the drift report —
-  while `JSON.parse` accepts far deeper documents. A depth limit must be the
-  *same* limit in every implementation, and the overflow behaviour (typed error
-  vs sentinel value) is a contract decision.
 - **Redaction fails open when a plan carries no sensitivity metadata**
   ([#10](https://github.com/4cloudguru/terraform-drift-contract/issues/10)).
-  Covered above: deliberate, matched by the Go mirror, pinned by a test row.
+  Covered above: the behaviour is deliberate, matched by the Go mirror and pinned
+  by test rows and vectors; the condition is now reported through
+  `Result.unmasked` rather than left silent.
 
 The drift callback's `module_locks` field is **not produced by this package** —
 each consumer assembles it from `.terraform/modules/modules.json` — but the same

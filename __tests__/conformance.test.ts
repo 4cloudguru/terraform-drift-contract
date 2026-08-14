@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { moduleCallsPlan, summarize, type Plan, type Result } from '../src/summarize'
+import {
+  DEFAULT_MAX_ATTRS_PER_ENTRY,
+  DEFAULT_MAX_ENTRIES,
+  moduleCallsPlan,
+  summarize,
+  type Plan,
+  type Result,
+} from '../src/summarize'
 
 // The conformance runner for the canonical side of the contract.
 //
@@ -32,11 +39,11 @@ const corpusURL = new URL('../conformance/vectors.json', import.meta.url)
 const corpusBytes = readFileSync(corpusURL)
 
 /** Byte digest of the corpus file. The Go mirror pins this same literal. */
-const CORPUS_SHA256 = 'bfcd27ff0b1304457420371dc6088a9fb8df937b7581b2ec211ffbfb5c55b20c'
+const CORPUS_SHA256 = '84bb23be80a420e7ff77ea0bd7808a8daeaef745f0190f896a917e387a929316'
 
 /** Digest over the rendered results of the reconciled subset. Same literal in
  *  the Go mirror. */
-const RECONCILED_DIGEST = '9551f9b36c2aebee75b8092e099d299885dd338519c57622b544bdabeb17c809'
+const RECONCILED_DIGEST = '4f0002731219d9491636de981cde760688f720971d9a3882a2d6f55e13b6a173'
 
 /** Digest over the emitted module provenance of every vector that carries an
  *  `expect_module_calls`. The jq mirror in the backend's dispatched templates
@@ -48,13 +55,19 @@ interface Vector {
   id: string
   why: string
   plan: Plan | null
-  expect: Result
+  /** States only the NON-DEFAULT markers; `render` fills the rest from the zero
+   *  value, so a vector says what is interesting about it rather than restating
+   *  five zeroes 56 times. */
+  expect: Partial<Result>
   expect_module_calls?: unknown
   go?: unknown
   jq?: unknown
 }
 
-const corpus = JSON.parse(corpusBytes.toString('utf8')) as { vectors: Vector[] }
+const corpus = JSON.parse(corpusBytes.toString('utf8')) as {
+  limits: { max_entries: number; max_attrs_per_entry: number }
+  vectors: Vector[]
+}
 
 /** The rendering discipline the mirrors reproduce, and the reason this is a
  *  function rather than a bare JSON.stringify:
@@ -64,13 +77,18 @@ const corpus = JSON.parse(corpusBytes.toString('utf8')) as { vectors: Vector[] }
  *      them unconditionally;
  *    - `<`, `>` and `&` stay raw, so the Go side must render through an encoder
  *      with SetEscapeHTML(false). */
-function render(r: Result): string {
+function render(r: Partial<Result>): string {
   const doc = {
-    added: r.added,
-    changed: r.changed,
-    destroyed: r.destroyed,
-    drifted: r.drifted,
-    summary: r.summary.map((e) =>
+    added: r.added ?? 0,
+    changed: r.changed ?? 0,
+    destroyed: r.destroyed ?? 0,
+    drifted: r.drifted ?? false,
+    unparseable: r.unparseable ?? false,
+    unmasked: r.unmasked ?? false,
+    truncated: r.truncated ?? false,
+    omitted_entries: r.omitted_entries ?? 0,
+    omitted_attrs: r.omitted_attrs ?? 0,
+    summary: (r.summary ?? []).map((e) =>
       e.attrs === undefined
         ? { address: e.address, actions: e.actions }
         : {
@@ -94,6 +112,15 @@ function escapeSeparators(s: string): string {
 describe('conformance corpus', () => {
   it('is the exact file the mirrors vendor', () => {
     expect(createHash('sha256').update(corpusBytes).digest('hex')).toBe(CORPUS_SHA256)
+  })
+
+  it('declares the bounds this implementation enforces', () => {
+    // The limits are the contract's, not this file's. If they are changed here
+    // without the corpus (or the other way round), the two stop describing the
+    // same bound and a consumer cannot tell a capped summary from a complete
+    // one across producers.
+    expect(corpus.limits.max_entries).toBe(DEFAULT_MAX_ENTRIES)
+    expect(corpus.limits.max_attrs_per_entry).toBe(DEFAULT_MAX_ATTRS_PER_ENTRY)
   })
 
   it('has vectors, uniquely identified', () => {
