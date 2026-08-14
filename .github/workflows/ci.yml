@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # An advisory against something already in the lockfile lands with no PR open.
+  # dependency-review only evaluates what a PR *changes*, so without a schedule
+  # nothing here ever re-asks the question after the merge.
+  schedule:
+    - cron: "19 5 * * 1"
   workflow_dispatch: {}
 
 permissions:
@@ -27,13 +32,31 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-      - run: npm ci
+      # --ignore-scripts: `tsc` and `vitest` need no install lifecycle script, and
+      # this job installs the toolchain into the same workspace that then produces
+      # the dist/ two CI systems execute. Matches publish.yml.
+      - run: npm ci --ignore-scripts
       - run: npm test
+
+      # The package ships zero runtime dependencies, so --omit=dev would audit an
+      # empty set; the exposure worth watching is the build/test toolchain that
+      # runs in this workspace.
+      - run: npm audit --audit-level=high
       - name: Rebuild and fail if dist is stale
         # Git-dependency consumers use the committed dist/ — it must match src/.
+        #
+        # `git diff` compares TRACKED content only, so a file the compiler newly
+        # emits into dist/ is invisible to it: the moment src/ grows a module,
+        # `npm run build && git commit -a` lands the tracked edits and drops the
+        # new dist/ file (`commit -a` never stages new paths), and from the next
+        # run onwards the gate is green over a dist/ whose index requires a module
+        # that is not in the tree. Stage the directory first and diff the INDEX so
+        # the check sees added, modified and deleted paths alike; --force covers a
+        # path a .gitignore rule (e.g. *.tsbuildinfo) would otherwise hide.
         run: |
           npm run build
-          if ! git diff --exit-code -- dist; then
+          git add --force -A -- dist
+          if ! git diff --cached --exit-code -- dist; then
             echo "::error::dist is out of date — run 'npm run build' and commit the result."
             exit 1
           fi

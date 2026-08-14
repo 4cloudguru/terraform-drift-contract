@@ -80,8 +80,13 @@ jobs:
       # dist/ is committed (git-dependency consumers install it without a build step), so a
       # release must never ship a dist that differs from the reviewed one on main.
       - name: Fail if the committed dist is stale
+        # Staged-then-diffed for the same reason as ci.yml: a plain `git diff`
+        # sees tracked content only, so a file the compiler newly emits into
+        # dist/ is invisible to it and this gate would certify — and publish — a
+        # dist/ whose index requires a module that is not in the tree.
         run: |
-          if ! git diff --exit-code -- dist; then
+          git add --force -A -- dist
+          if ! git diff --cached --exit-code -- dist; then
             echo "::error::dist is out of date at the release tag — run 'npm run build' and commit the result before releasing."
             exit 1
           fi
