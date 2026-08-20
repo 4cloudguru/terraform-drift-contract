@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.1](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.2.0...v1.2.1) (2026-08-20)
+
+
+### Bug Fixes
+
+* **ci:** refuse to run signature-replay when Dependabot edited the workflow ([#56](https://github.com/4cloudguru/terraform-drift-contract/issues/56)) ([9fafebd](https://github.com/4cloudguru/terraform-drift-contract/commit/9fafebdc2194a2e787cfd6d408ffc05ac698861e))
+
+
+### Documentation
+
+* **security:** record the shared-workflow trust relationship, and fix what it invalidated ([#64](https://github.com/4cloudguru/terraform-drift-contract/issues/64)) ([8160fd0](https://github.com/4cloudguru/terraform-drift-contract/commit/8160fd0c14083c2c47a07fcfc3f82af45a8ae7d0))
+
 ## [1.2.0](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.1.1...v1.2.0) (2026-08-14)
 
 
