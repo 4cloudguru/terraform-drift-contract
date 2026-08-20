@@ -27,6 +27,7 @@ jobs:
   # the publish token, mint an OIDC token, or forge attestations. Emits the exact tarball.
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     outputs:
@@ -34,6 +35,11 @@ jobs:
     steps:
       # audit, not block: this job runs npm ci/build/test, so its egress footprint is not
       # stable enough to allowlist. It holds no secrets; the privileged job below blocks.
+      # hardening-exception: egress-audit — this job installs from the npm registry,
+      #   transfers artifacts through the Actions API, and clones this repository;
+      #   harden-runner has never run in this repository, so no endpoint baseline
+      #   exists and a block policy written without one fails closed on its first run;
+      #   audit is what produces that list
       - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
           egress-policy: audit
@@ -168,6 +174,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     # A deployment tag policy on the "release" environment restricts this to v* tags, and its
     # required reviewer is the human gate in front of every publish.
     environment: release
