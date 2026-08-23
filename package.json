@@ -23,6 +23,7 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --coverage",
     "lint": "tsc --noEmit",
+    "test:advisory": "node scripts/test-dependabot-advisory.mjs",
     "prepack": "npm run build",
     "test:coverage": "vitest run --coverage"
   },
