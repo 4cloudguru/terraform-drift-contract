@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.2.1...v1.2.2) (2026-08-24)
+
+
+### Bug Fixes
+
+* **ci:** make zizmor fail the build instead of filing a report ([#71](https://github.com/4cloudguru/terraform-drift-contract/issues/71)) ([75d3ab5](https://github.com/4cloudguru/terraform-drift-contract/commit/75d3ab585047993b0a8c60031ad667805c3853ea))
+
 ## [1.2.1](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.2.0...v1.2.1) (2026-08-20)
 
 
