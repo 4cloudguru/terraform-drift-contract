@@ -220,7 +220,14 @@ decision recorded across all implementations first:
   part of #18 that is not fixable here: by the time `summarize()` sees the plan,
   the two serials are already the same double. Changing it means parsing the plan
   with a numeric-literal-preserving reader in **every** consumer, which is a
-  parse-boundary decision, not an edit inside this package. The formatting halves
+  parse-boundary decision, not an edit inside this package -- and doing it is NOT
+  sufficient on its own. The obvious reader (a `JSON.parse` reviver returning
+  `BigInt(ctx.source)` for unsafe integers) makes `summarize()` throw `TypeError:
+  Do not know how to serialize a BigInt`, because `stableStringify` has no BigInt
+  branch. Teaching it one is itself a contract change rather than a local fix,
+  since Go's `canon()` has no BigInt equivalent and the two would then disagree.
+  So the parse-boundary decision has to be taken together with a serializer
+  decision on both sides. The formatting halves
   of #18 (whole floats, negative zero) are fixed and have vectors.
 - **Redaction fails open when a plan carries no sensitivity metadata**
   ([#10](https://github.com/4cloudguru/terraform-drift-contract/issues/10)).

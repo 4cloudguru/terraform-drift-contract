@@ -39,7 +39,7 @@ const corpusURL = new URL('../conformance/vectors.json', import.meta.url)
 const corpusBytes = readFileSync(corpusURL)
 
 /** Byte digest of the corpus file. The Go mirror pins this same literal. */
-const CORPUS_SHA256 = '84bb23be80a420e7ff77ea0bd7808a8daeaef745f0190f896a917e387a929316'
+const CORPUS_SHA256 = '668a292a169dedfad131e98d44f7768159635112a7fbf2cf11a201ffb02e8daa'
 
 /** Digest over the rendered results of the reconciled subset. Same literal in
  *  the Go mirror. */
