@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.3](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.2.2...v1.2.3) (2026-08-29)
+
+
+### Bug Fixes
+
+* **conformance:** the large-integer vector pinned nothing -- both serials were already collapsed ([#73](https://github.com/4cloudguru/terraform-drift-contract/issues/73)) ([6cbaca1](https://github.com/4cloudguru/terraform-drift-contract/commit/6cbaca1e8a4419149f8748792b264af2a37ea54a)), closes [#18](https://github.com/4cloudguru/terraform-drift-contract/issues/18)
+
 ## [1.2.2](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.2.1...v1.2.2) (2026-08-24)
 
 
