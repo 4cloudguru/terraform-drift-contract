@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.2.3...v1.3.0) (2026-08-31)
+
+
+### Features
+
+* **ci:** adopt the shared Dependabot CI-health check ([#76](https://github.com/4cloudguru/terraform-drift-contract/issues/76)) ([b884d05](https://github.com/4cloudguru/terraform-drift-contract/commit/b884d052effd801abcd2738f0a2f02bb31943c84))
+
 ## [1.2.3](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.2.2...v1.2.3) (2026-08-29)
 
 

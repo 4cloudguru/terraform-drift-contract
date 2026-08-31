@@ -1,6 +1,6 @@
 {
   "name": "@4cloudguru/terraform-drift-contract",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "Shared parser for Terraform/OpenTofu plan JSON → TSM drift counts + summary. One source of truth for the GitHub Action, the Azure DevOps task, and the backend's driftingest semantics.",
   "license": "Apache-2.0",
   "private": false,
