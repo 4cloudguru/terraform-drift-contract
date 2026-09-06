@@ -66,7 +66,8 @@ import { summarize, moduleCallsPlan, type Plan, type Result } from '@4cloudguru/
 // be one more thing the four implementations have to agree on.
 const plan: Plan = JSON.parse(fs.readFileSync('plan.json', 'utf8'))
 const r: Result = summarize(plan)
-// r = { added, changed, destroyed, drifted, summary: [{ address, actions }],
+// r = { added, changed, destroyed, drift_added, drift_changed, drift_destroyed,
+//       drifted, summary: [{ address, actions }], drift_summary: [{ address, actions }],
 //       unparseable, unmasked, truncated, omitted_entries, omitted_attrs }
 
 // Bounds are defaulted, not mandatory. Both defaults are declared in the shared
@@ -130,7 +131,17 @@ truncation and masking caveats apply to them as to `attrs`.
 - `truncated` / `omitted_entries` / `omitted_attrs` = a bound was reached, and by
   how much, so a consumer can tell "no more drift" from "we stopped looking".
   **The counts are never capped** — capping them would turn a payload bound into
-  a missed detection — so `drifted` stays truthful when the summary does not.
+  a missed detection — so `drifted` stays truthful when the summary does not;
+- `drift_added` / `drift_changed` / `drift_destroyed` / `drift_summary` = the
+  same rules as `added`/`changed`/`destroyed`/`summary` above (skip, count,
+  attrs, masking, bounds — the identical per-item logic, not a second
+  implementation), computed from the optional `resource_drift` array instead of
+  `resource_changes`. `resource_drift` is **infra drift** — hand-edits or other
+  out-of-band changes — as distinct from the unapplied config changes in
+  `resource_changes`. Zero / `[]` when `resource_drift` is absent or not an
+  array. Purely additive: never affects `drifted`, `summary`, or the three
+  original counts, and `unmasked`/`truncated`/`omitted_entries`/`omitted_attrs`
+  report only the `resource_changes` path — see [SECURITY.md](SECURITY.md).
 
 ### Module provenance (`moduleCallsPlan`)
 

@@ -43,6 +43,15 @@
 // here, so it is simply the contract. The jq path has no attribute values to
 // mask — its summary is {address, actions} only. See SECURITY.md for the
 // differences that do remain, none of which is a redaction gap.
+//
+// `resource_drift` (optional) is infra drift — hand-edits or other out-of-band
+// changes — as distinct from the unapplied config changes in
+// `resource_changes`. It is run through the identical rules above (skip,
+// counts, attrs, masking, bounds) via the shared `processChanges`, and reports
+// through the parallel `drift_added`/`drift_changed`/`drift_destroyed`/
+// `drift_summary` fields. It is purely additive: absent or malformed input
+// reports zero drift and never affects `resource_changes` handling, `drifted`,
+// or `summary`.
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DEFAULT_MAX_ATTRS_PER_ENTRY = exports.DEFAULT_MAX_ENTRIES = void 0;
 exports.fmt = fmt;
@@ -272,7 +281,14 @@ function has(actions, action) {
 function isSkipped(actions) {
     return actions.length === 1 && (actions[0] === 'no-op' || actions[0] === 'read');
 }
-function summarize(plan, options = {}) {
+/** The per-item loop: count, skip, mask and bound. Extracted so
+ *  `resource_changes` and `resource_drift` run through the IDENTICAL logic
+ *  rather than a parallel copy — a second copy is exactly how the two paths
+ *  would drift apart, which is the bug the drift-count feature exists to
+ *  avoid. `changes` must already be normalised to an array (see the call
+ *  sites in `summarize`); this function does not itself decide what counts as
+ *  "absent". */
+function processChanges(changes, maxEntries, maxAttrsPerEntry) {
     const summary = [];
     let added = 0;
     let changed = 0;
@@ -280,24 +296,6 @@ function summarize(plan, options = {}) {
     let unmasked = false;
     let omittedEntries = 0;
     let omittedAttrs = 0;
-    const maxEntries = options.maxEntries ?? exports.DEFAULT_MAX_ENTRIES;
-    const maxAttrsPerEntry = options.maxAttrsPerEntry ?? exports.DEFAULT_MAX_ATTRS_PER_ENTRY;
-    // The plan is attacker-influenced JSON that has been through JSON.parse, not a
-    // typed object: every field is `unknown` at runtime no matter what `Plan`
-    // declares. Normalise the three fields this loop reads ONCE, here, so that
-    // every reader below sees the declared type and the two helpers cannot
-    // disagree about it. Previously `isSkipped` duck-typed `actions` while `has`
-    // guarded it, so `{"length":1,"0":"no-op"}` was DROPPED from the summary
-    // entirely, and a non-array `resource_changes` threw a raw TypeError out of
-    // the library into the consumer's CI step.
-    //
-    // Whether it IS an array is also the parse signal: a `terraform show -json`
-    // document always carries `resource_changes`, so its absence or wrong type
-    // means this is not a plan — the one thing summarize() can say truthfully
-    // about a document it could not read. See `Result.unparseable`.
-    const rawChanges = plan?.resource_changes;
-    const unparseable = !Array.isArray(rawChanges);
-    const changes = unparseable ? [] : rawChanges;
     for (const c of changes) {
         // A null or primitive entry is valid JSON; reading `.change` off it throws.
         if (c === null || typeof c !== 'object' || Array.isArray(c))
@@ -405,17 +403,50 @@ function summarize(plan, options = {}) {
         }
         summary.push(item);
     }
+    return { added, changed, destroyed, summary, unmasked, omittedEntries, omittedAttrs };
+}
+function summarize(plan, options = {}) {
+    const maxEntries = options.maxEntries ?? exports.DEFAULT_MAX_ENTRIES;
+    const maxAttrsPerEntry = options.maxAttrsPerEntry ?? exports.DEFAULT_MAX_ATTRS_PER_ENTRY;
+    // The plan is attacker-influenced JSON that has been through JSON.parse, not a
+    // typed object: every field is `unknown` at runtime no matter what `Plan`
+    // declares. Normalise the fields this function reads ONCE, here, so that
+    // every reader below sees the declared type and the two helpers inside
+    // `processChanges` cannot disagree about it. Previously `isSkipped` duck-typed
+    // `actions` while `has` guarded it, so `{"length":1,"0":"no-op"}` was DROPPED
+    // from the summary entirely, and a non-array `resource_changes` threw a raw
+    // TypeError out of the library into the consumer's CI step.
+    //
+    // Whether it IS an array is also the parse signal: a `terraform show -json`
+    // document always carries `resource_changes`, so its absence or wrong type
+    // means this is not a plan — the one thing summarize() can say truthfully
+    // about a document it could not read. See `Result.unparseable`.
+    const rawChanges = plan?.resource_changes;
+    const unparseable = !Array.isArray(rawChanges);
+    const changes = unparseable ? [] : rawChanges;
+    const primary = processChanges(changes, maxEntries, maxAttrsPerEntry);
+    // `resource_drift` is optional and purely additive, so unlike `resource_changes`
+    // above its absence or wrong type is not a parse failure — it is simply "no
+    // drift reported", and does not touch `unparseable` (which describes the
+    // DOCUMENT, not this one optional field).
+    const rawDrift = plan?.resource_drift;
+    const driftChanges = Array.isArray(rawDrift) ? rawDrift : [];
+    const drift = processChanges(driftChanges, maxEntries, maxAttrsPerEntry);
     return {
-        added,
-        changed,
-        destroyed,
-        drifted: added + changed + destroyed > 0,
-        summary,
+        added: primary.added,
+        changed: primary.changed,
+        destroyed: primary.destroyed,
+        drift_added: drift.added,
+        drift_changed: drift.changed,
+        drift_destroyed: drift.destroyed,
+        drifted: primary.added + primary.changed + primary.destroyed > 0,
+        summary: primary.summary,
+        drift_summary: drift.summary,
         unparseable,
-        unmasked,
-        truncated: omittedEntries > 0 || omittedAttrs > 0,
-        omitted_entries: omittedEntries,
-        omitted_attrs: omittedAttrs,
+        unmasked: primary.unmasked,
+        truncated: primary.omittedEntries > 0 || primary.omittedAttrs > 0,
+        omitted_entries: primary.omittedEntries,
+        omitted_attrs: primary.omittedAttrs,
     };
 }
 /** Upper bound on the top-level module calls forwarded as provenance. A root

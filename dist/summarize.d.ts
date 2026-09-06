@@ -23,6 +23,14 @@ export interface ResourceChange {
 /** The subset of a `terraform show -json` / `tofu show -json` document we read. */
 export interface Plan {
     resource_changes?: ResourceChange[];
+    /** Infra drift: hand-edits or other out-of-band changes, as opposed to the
+     *  unapplied config changes in `resource_changes` (e.g. from a
+     *  `-refresh-only` plan or an equivalent drift-detection pass). Optional and
+     *  additive — absent or malformed input reports zero drift counts and an
+     *  empty `drift_summary` rather than affecting `resource_changes` handling
+     *  in any way. Run through the identical skip/count/mask/bound rules as
+     *  `resource_changes` — see `processChanges`. */
+    resource_drift?: ResourceChange[];
     configuration?: {
         root_module?: {
             module_calls?: Record<string, unknown>;
@@ -55,8 +63,22 @@ export interface Result {
     added: number;
     changed: number;
     destroyed: number;
+    /** `added`/`changed`/`destroyed`, computed from `resource_drift` instead of
+     *  `resource_changes` — infra drift rather than unapplied config changes.
+     *  Same skip rules (exactly `["no-op"]` or `["read"]`) and the same
+     *  `maxEntries`/`maxAttrsPerEntry` bounds, via the identical per-item logic
+     *  (`processChanges`). Zero when `resource_drift` is absent or not an array.
+     *  Purely additive: does not affect `drifted`, `summary`, or the three
+     *  counts above. */
+    drift_added: number;
+    drift_changed: number;
+    drift_destroyed: number;
     drifted: boolean;
     summary: SummaryEntry[];
+    /** Parallel to `summary`, rendered from `resource_drift`. Empty when
+     *  `resource_drift` is absent or not an array. Never influences `summary`
+     *  itself. */
+    drift_summary: SummaryEntry[];
     /** The document did not have the shape of a plan: it is not an object, or its
      *  `resource_changes` is absent or not an array.
      *
