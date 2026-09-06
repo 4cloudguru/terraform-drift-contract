@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.3.0...v1.4.0) (2026-09-06)
+
+
+### Features
+
+* add resource_drift counts and a parallel drift_summary to the contract ([#83](https://github.com/4cloudguru/terraform-drift-contract/issues/83)) ([e5706cd](https://github.com/4cloudguru/terraform-drift-contract/commit/e5706cdfd32171425fa9c9be9fec0ca84152bec8))
+
 ## [1.3.0](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.2.3...v1.3.0) (2026-08-31)
 
 
