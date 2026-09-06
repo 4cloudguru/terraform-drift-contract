@@ -42,6 +42,10 @@ pin moves — that is a property of the pin, not of a release.
   whole** — and it is driven *entirely* by that metadata, so a plan carrying
   neither mirror gets no masking at all (next section). Neither precondition is
   a bug to be fixed silently; both are how the mirrors behave too.
+
+  `drift_summary` (`resource_drift`, optional, additive) is masked by this same
+  guarantee, with the same two preconditions — it is produced by the identical
+  per-item logic as `summary`, not a second implementation.
 - **Module provenance is projected, not forwarded.** `moduleCallsPlan()` emits
   only `source` and `version_constraint` per module call. The plan's
   `configuration` block carries no sensitivity metadata at all, so
@@ -57,7 +61,9 @@ pin moves — that is a property of the pin, not of a release.
   **counts are deliberately not capped**, so `drifted` stays truthful when the
   summary does not — a bound that suppressed a count would turn a payload limit
   into a missed detection. Before this, 5000 resources x 50 attrs produced a
-  153.6 MiB callback body from a plan authorable on a fork PR.
+  153.6 MiB callback body from a plan authorable on a fork PR. `drift_summary`
+  is bounded by the same two numbers (see "What this package does not
+  guarantee" for the scope of the `truncated`/`unmasked` markers themselves).
 - **The serializer cannot be made to throw.** `stableStringify` is iterative. The
   recursive form threw `RangeError` at ~2,600 levels of nesting, out of
   `summarize()` and into the consumer's CI step — before the drift callback
@@ -98,6 +104,18 @@ by inverting the guard and confirming the rows fail.
   Action and the ADO task can warn or fail the step, and an operator can tell
   "nothing was sensitive" from "we had no sensitivity metadata". The behaviour is
   unchanged; the silence is not.
+- **`unmasked`/`truncated`/`omitted_entries`/`omitted_attrs` report only the
+  `resource_changes` path, not `resource_drift`.** An entry in `drift_summary`
+  is masked and bounded by the identical rules as `summary` (see "What this
+  package guarantees"), but a plan whose *only* unmasked or truncated change
+  lives in `resource_drift` still reports `unmasked: false` / `truncated:
+  false`. `drift_added`/`drift_changed`/`drift_destroyed`/`drift_summary` do not
+  have this gap — they are computed from `resource_drift` and nothing else — it
+  is specifically these four marker fields that stay scoped to
+  `resource_changes`. This is a deliberate, minimal scope for the additive
+  change that introduced `resource_drift`; a consumer that wants a drift-aware
+  redaction or truncation signal must inspect `drift_summary` itself rather than
+  read these four markers as covering it.
 - **Nothing downstream of this package.** How a consumer stores, logs or renders
   the returned object is the consumer's responsibility. Vulnerabilities arising
   from misuse of this API belong to the consuming repository.

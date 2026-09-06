@@ -8,6 +8,7 @@ import {
   summarize,
   type Plan,
   type Result,
+  type SummaryEntry,
 } from '../src/summarize'
 
 // The conformance runner for the canonical side of the contract.
@@ -38,12 +39,24 @@ import {
 const corpusURL = new URL('../conformance/vectors.json', import.meta.url)
 const corpusBytes = readFileSync(corpusURL)
 
-/** Byte digest of the corpus file. The Go mirror pins this same literal. */
-const CORPUS_SHA256 = '668a292a169dedfad131e98d44f7768159635112a7fbf2cf11a201ffb02e8daa'
+/** Byte digest of the corpus file. The Go mirror pins this same literal.
+ *
+ *  Updated for the 6 `drift/*` vectors added alongside `resource_drift` /
+ *  `drift_added` / `drift_changed` / `drift_destroyed` / `drift_summary`
+ *  (contract Phase 5 item 1): the corpus file's bytes changed, so this digest
+ *  must change with it — a stale value here would mean this repo's copy and
+ *  the Go mirror's vendored copy have silently diverged. */
+const CORPUS_SHA256 = '7052e9e0093538f411e538ded70d363dfb59980223a2b2e26ad25546fdbaa5aa'
 
 /** Digest over the rendered results of the reconciled subset. Same literal in
- *  the Go mirror. */
-const RECONCILED_DIGEST = '4f0002731219d9491636de981cde760688f720971d9a3882a2d6f55e13b6a173'
+ *  the Go mirror.
+ *
+ *  Updated for the same reason as CORPUS_SHA256: `render()` now includes
+ *  `drift_added`/`drift_changed`/`drift_destroyed`/`drift_summary`, so every
+ *  reconciled vector's rendered bytes changed even where its drift fields are
+ *  all-default, and the 6 new `drift/*` vectors (none states a `go`
+ *  difference, so all 6 join the reconciled set) contribute their own rows. */
+const RECONCILED_DIGEST = 'bc1a7fcfb176c628f26665ab0f039d493526b513585649821777781a7dbcbc1b'
 
 /** Digest over the emitted module provenance of every vector that carries an
  *  `expect_module_calls`. The jq mirror in the backend's dispatched templates
@@ -69,6 +82,22 @@ const corpus = JSON.parse(corpusBytes.toString('utf8')) as {
   vectors: Vector[]
 }
 
+/** Renders one `summary`/`drift_summary` array under the shared discipline:
+ *  `attrs` omitted, never emitted as null or []. Factored out so the two
+ *  parallel arrays go through identical rendering rather than a second copy
+ *  of the same mapping. */
+function renderEntries(entries: SummaryEntry[]): unknown[] {
+  return entries.map((e) =>
+    e.attrs === undefined
+      ? { address: e.address, actions: e.actions }
+      : {
+          address: e.address,
+          actions: e.actions,
+          attrs: e.attrs.map((a) => ({ name: a.name, before: a.before, after: a.after })),
+        },
+  )
+}
+
 /** The rendering discipline the mirrors reproduce, and the reason this is a
  *  function rather than a bare JSON.stringify:
  *    - field order is fixed by construction, not by the corpus file's key order;
@@ -82,21 +111,17 @@ function render(r: Partial<Result>): string {
     added: r.added ?? 0,
     changed: r.changed ?? 0,
     destroyed: r.destroyed ?? 0,
+    drift_added: r.drift_added ?? 0,
+    drift_changed: r.drift_changed ?? 0,
+    drift_destroyed: r.drift_destroyed ?? 0,
     drifted: r.drifted ?? false,
     unparseable: r.unparseable ?? false,
     unmasked: r.unmasked ?? false,
     truncated: r.truncated ?? false,
     omitted_entries: r.omitted_entries ?? 0,
     omitted_attrs: r.omitted_attrs ?? 0,
-    summary: (r.summary ?? []).map((e) =>
-      e.attrs === undefined
-        ? { address: e.address, actions: e.actions }
-        : {
-            address: e.address,
-            actions: e.actions,
-            attrs: e.attrs.map((a) => ({ name: a.name, before: a.before, after: a.after })),
-          },
-    ),
+    summary: renderEntries(r.summary ?? []),
+    drift_summary: renderEntries(r.drift_summary ?? []),
   }
   return escapeSeparators(JSON.stringify(doc))
 }
@@ -132,6 +157,24 @@ describe('conformance corpus', () => {
 
   it.each(corpus.vectors.map((v) => [v.id, v] as const))('%s', (_id, vector) => {
     expect(render(summarize(vector.plan))).toBe(render(vector.expect))
+  })
+
+  // `resource_drift`/`drift_added`/`drift_changed`/`drift_destroyed`/`drift_summary`
+  // are additive: every vector that predates them (id NOT prefixed `drift/`) must
+  // keep reporting byte-identical `summary` and the three original counts, which is
+  // the back-compat guarantee the whole design rests on. Pinned at 56 so a future
+  // edit to what counts as "pre-existing" is deliberate, not an accidental
+  // narrowing or widening of this guard's coverage.
+  it('summary and the three existing counts are unchanged for every pre-existing vector', () => {
+    const preExisting = corpus.vectors.filter((v) => !v.id.startsWith('drift/'))
+    expect(preExisting.length).toBe(56)
+    for (const vector of preExisting) {
+      const result = summarize(vector.plan)
+      expect(result.added).toBe(vector.expect.added ?? 0)
+      expect(result.changed).toBe(vector.expect.changed ?? 0)
+      expect(result.destroyed).toBe(vector.expect.destroyed ?? 0)
+      expect(JSON.stringify(result.summary)).toBe(JSON.stringify(vector.expect.summary ?? []))
+    }
   })
 
   const provenance = corpus.vectors.filter((v) => v.expect_module_calls !== undefined)
