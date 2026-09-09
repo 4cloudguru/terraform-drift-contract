@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.4.0...v1.4.1) (2026-09-09)
+
+
+### Bug Fixes
+
+* **ci:** scope the blocking publish audit to production dependencies ([#88](https://github.com/4cloudguru/terraform-drift-contract/issues/88)) ([d906d5f](https://github.com/4cloudguru/terraform-drift-contract/commit/d906d5f4f630a7851b72d93932e3cd287e15d8cd))
+
 ## [1.4.0](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.3.0...v1.4.0) (2026-09-06)
 
 
