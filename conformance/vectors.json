@@ -780,6 +780,567 @@
       }
     },
     {
+      "id": "attrs/timeouts-null-leaved-vs-null-is-unchanged",
+      "why": "The shape from the Brunswick fleet drift run of 2026-10-21 (azurerm). terraform-plugin-sdk keeps `timeouts` out of the attribute diff and copies the configured value into the planned state, so a state can carry the unconfigured block as an object of nulls while the plan's after is null. Neither side carries a value and terraform plans no change for it, so `timeouts` is not reported; the resource's real change still is.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_subnet.app",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "name": "snet-app",
+                "private_link_service_network_policies_enabled": true,
+                "timeouts": {
+                  "create": null,
+                  "delete": null,
+                  "read": null,
+                  "update": null
+                }
+              },
+              "after": {
+                "name": "snet-app",
+                "private_link_service_network_policies_enabled": false,
+                "timeouts": null
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_subnet.app",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "private_link_service_network_policies_enabled",
+                "before": "true",
+                "after": "false"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/timeouts-only-difference-keeps-the-row",
+      "why": "When `timeouts` is the only difference the entry carries no attrs, but the row and the counts still come from the actions. Ignoring the shape difference never hides that terraform planned an update.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_public_ip.pip",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "name": "pip",
+                "timeouts": {
+                  "create": null,
+                  "delete": null,
+                  "read": null,
+                  "update": null
+                }
+              },
+              "after": {
+                "name": "pip",
+                "timeouts": null
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_public_ip.pip",
+            "actions": [
+              "update"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/timeouts-null-equivalent-shapes",
+      "why": "Null-equivalent means null, absent, or a NON-EMPTY object or list whose every member is itself null or null-equivalent. Both sides null-equivalent is not a change: the reverse direction (a), a list-wrapped block against an absent key (b), and two null-leaved objects of different shapes (c) all carry no value on either side.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_storage_account.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "name": "a",
+                "timeouts": null
+              },
+              "after": {
+                "name": "a",
+                "timeouts": {
+                  "create": null,
+                  "delete": null,
+                  "read": null,
+                  "update": null
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          },
+          {
+            "address": "azurerm_storage_account.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "name": "b",
+                "timeouts": [
+                  {
+                    "create": null,
+                    "delete": null
+                  }
+                ]
+              },
+              "after": {
+                "name": "b"
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          },
+          {
+            "address": "azurerm_storage_account.c",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "name": "c",
+                "timeouts": {
+                  "create": null,
+                  "delete": null
+                }
+              },
+              "after": {
+                "name": "c",
+                "timeouts": {
+                  "create": null,
+                  "delete": null,
+                  "read": null,
+                  "update": null
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 3,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_storage_account.a",
+            "actions": [
+              "update"
+            ]
+          },
+          {
+            "address": "azurerm_storage_account.b",
+            "actions": [
+              "update"
+            ]
+          },
+          {
+            "address": "azurerm_storage_account.c",
+            "actions": [
+              "update"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/null-leaved-vs-null-on-another-key-still-shows",
+      "why": "The null-equivalence applies to `timeouts` only. On any other key the shape difference can be real: an object of nulls against null is a block that is present but empty where it was absent (a), and plan JSON writes an unknown list element as null, so a list of nulls on the after side can be values known only after apply (b; this contract does not read after_unknown).",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_storage_account.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "name": "a",
+                "retention_policy": {
+                  "days": null,
+                  "enabled": null
+                }
+              },
+              "after": {
+                "name": "a",
+                "retention_policy": null
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          },
+          {
+            "address": "azurerm_network_interface.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "name": "b",
+                "private_ip_addresses": null
+              },
+              "after": {
+                "name": "b",
+                "private_ip_addresses": [
+                  null
+                ]
+              },
+              "after_unknown": {
+                "private_ip_addresses": [
+                  true
+                ]
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 2,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_storage_account.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "retention_policy",
+                "before": "{\"days\":null,\"enabled\":null}",
+                "after": null
+              }
+            ]
+          },
+          {
+            "address": "azurerm_network_interface.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "private_ip_addresses",
+                "before": null,
+                "after": "[null]"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/timeouts-with-a-value-still-shows",
+      "why": "Only a value-free shape difference is ignored. A `timeouts` block with any non-null leaf, on either side, is a change and is reported: a configured timeout removed (a), and one added where the state held an object of nulls (b).",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_linux_virtual_machine.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "name": "a",
+                "timeouts": {
+                  "create": "30m",
+                  "delete": null,
+                  "read": null,
+                  "update": null
+                }
+              },
+              "after": {
+                "name": "a",
+                "timeouts": null
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          },
+          {
+            "address": "azurerm_linux_virtual_machine.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "name": "b",
+                "timeouts": {
+                  "create": null,
+                  "delete": null,
+                  "read": null,
+                  "update": null
+                }
+              },
+              "after": {
+                "name": "b",
+                "timeouts": {
+                  "create": "60m",
+                  "delete": null,
+                  "read": null,
+                  "update": null
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 2,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_linux_virtual_machine.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "timeouts",
+                "before": "{\"create\":\"30m\",\"delete\":null,\"read\":null,\"update\":null}",
+                "after": null
+              }
+            ]
+          },
+          {
+            "address": "azurerm_linux_virtual_machine.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "timeouts",
+                "before": "{\"create\":null,\"delete\":null,\"read\":null,\"update\":null}",
+                "after": "{\"create\":\"60m\",\"delete\":null,\"read\":null,\"update\":null}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/timeouts-empty-container-is-not-null-equivalent",
+      "why": "An empty object or list has no null leaf, so it is not null-equivalent: an empty list against a populated one (a) and an empty object against null (b) still show. Plan JSON drops an unknown object member, so an empty object on the after side can be an object whose every member is known only after apply.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_key_vault.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "name": "a",
+                "timeouts": []
+              },
+              "after": {
+                "name": "a",
+                "timeouts": [
+                  {
+                    "create": null,
+                    "delete": null
+                  }
+                ]
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          },
+          {
+            "address": "azurerm_key_vault.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "name": "b",
+                "timeouts": {}
+              },
+              "after": {
+                "name": "b",
+                "timeouts": null
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 2,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_key_vault.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "timeouts",
+                "before": "[]",
+                "after": "[{\"create\":null,\"delete\":null}]"
+              }
+            ]
+          },
+          {
+            "address": "azurerm_key_vault.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "timeouts",
+                "before": "{}",
+                "after": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/timeouts-on-a-replacement",
+      "why": "A replacement keeps every real change, including an attribute whose after is unknown (plan JSON drops it from after, so it reads as null), while the `timeouts` shape difference is not reported (a). A replacement whose whole after is unknown is not an in-place change and carries no attrs, as before (b).",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_storage_account.a",
+            "change": {
+              "actions": [
+                "delete",
+                "create"
+              ],
+              "before": {
+                "id": "/subscriptions/0000/sa1",
+                "name": "sa1",
+                "timeouts": {
+                  "create": null,
+                  "delete": null,
+                  "read": null,
+                  "update": null
+                }
+              },
+              "after": {
+                "name": "sa2",
+                "timeouts": null
+              },
+              "after_unknown": {
+                "id": true
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          },
+          {
+            "address": "azurerm_storage_account.b",
+            "change": {
+              "actions": [
+                "delete",
+                "create"
+              ],
+              "before": {
+                "id": "/subscriptions/0000/sb1",
+                "name": "sb1",
+                "timeouts": {
+                  "create": null,
+                  "delete": null,
+                  "read": null,
+                  "update": null
+                }
+              },
+              "after": null,
+              "after_unknown": true,
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 2,
+        "changed": 0,
+        "destroyed": 2,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_storage_account.a",
+            "actions": [
+              "delete",
+              "create"
+            ],
+            "attrs": [
+              {
+                "name": "id",
+                "before": "/subscriptions/0000/sa1",
+                "after": null
+              },
+              {
+                "name": "name",
+                "before": "sa1",
+                "after": "sa2"
+              }
+            ]
+          },
+          {
+            "address": "azurerm_storage_account.b",
+            "actions": [
+              "delete",
+              "create"
+            ]
+          }
+        ]
+      }
+    },
+    {
       "id": "masking/before-mirror-only",
       "why": "PINNED: the mask is a UNION over both mirrors. A config-derived mark applies to the planned value only, so a credential routinely arrives marked on exactly one side; masking per-side emitted the other verbatim.",
       "plan": {

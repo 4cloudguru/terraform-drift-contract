@@ -45,8 +45,11 @@ const corpusBytes = readFileSync(corpusURL)
  *  `drift_added` / `drift_changed` / `drift_destroyed` / `drift_summary`
  *  (contract Phase 5 item 1): the corpus file's bytes changed, so this digest
  *  must change with it — a stale value here would mean this repo's copy and
- *  the Go mirror's vendored copy have silently diverged. */
-const CORPUS_SHA256 = '7052e9e0093538f411e538ded70d363dfb59980223a2b2e26ad25546fdbaa5aa'
+ *  the Go mirror's vendored copy have silently diverged.
+ *
+ *  Updated again for the 7 `timeouts` null-equivalence vectors
+ *  (`attrs/timeouts-*`, `attrs/null-leaved-vs-null-on-another-key-still-shows`). */
+const CORPUS_SHA256 = '338d86c9a8d61134257810fc99d57e7abbc7832ce33d3cff031d0024208cdaec'
 
 /** Digest over the rendered results of the reconciled subset. Same literal in
  *  the Go mirror.
@@ -55,8 +58,11 @@ const CORPUS_SHA256 = '7052e9e0093538f411e538ded70d363dfb59980223a2b2e26ad25546f
  *  `drift_added`/`drift_changed`/`drift_destroyed`/`drift_summary`, so every
  *  reconciled vector's rendered bytes changed even where its drift fields are
  *  all-default, and the 6 new `drift/*` vectors (none states a `go`
- *  difference, so all 6 join the reconciled set) contribute their own rows. */
-const RECONCILED_DIGEST = 'bc1a7fcfb176c628f26665ab0f039d493526b513585649821777781a7dbcbc1b'
+ *  difference, so all 6 join the reconciled set) contribute their own rows.
+ *
+ *  Updated again for the 7 `timeouts` vectors, which state no `go` difference
+ *  and so all join the reconciled set. */
+const RECONCILED_DIGEST = '3b52966c0a5907dd2d317f8f9eed80605022ff1eca6a05c700068f481a3b516c'
 
 /** Digest over the emitted module provenance of every vector that carries an
  *  `expect_module_calls`. The jq mirror in the backend's dispatched templates
@@ -162,12 +168,13 @@ describe('conformance corpus', () => {
   // `resource_drift`/`drift_added`/`drift_changed`/`drift_destroyed`/`drift_summary`
   // are additive: every vector that predates them (id NOT prefixed `drift/`) must
   // keep reporting byte-identical `summary` and the three original counts, which is
-  // the back-compat guarantee the whole design rests on. Pinned at 56 so a future
-  // edit to what counts as "pre-existing" is deliberate, not an accidental
-  // narrowing or widening of this guard's coverage.
+  // the back-compat guarantee the whole design rests on. Pinned so a future edit
+  // to what counts as "pre-existing" is deliberate, not an accidental narrowing
+  // or widening of this guard's coverage: 56 when resource_drift landed, 63 since
+  // the 7 `timeouts` null-equivalence vectors.
   it('summary and the three existing counts are unchanged for every pre-existing vector', () => {
     const preExisting = corpus.vectors.filter((v) => !v.id.startsWith('drift/'))
-    expect(preExisting.length).toBe(56)
+    expect(preExisting.length).toBe(63)
     for (const vector of preExisting) {
       const result = summarize(vector.plan)
       expect(result.added).toBe(vector.expect.added ?? 0)
