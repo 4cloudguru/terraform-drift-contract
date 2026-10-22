@@ -78,6 +78,80 @@ describe('summarize — attrs extraction + sensitive masking', () => {
   })
 })
 
+describe('summarize — timeouts null-equivalence', () => {
+  const NULLS = { create: null, delete: null, read: null, update: null }
+  const change = (before: unknown, after: unknown) => ({
+    address: 'azurerm_subnet.a',
+    change: { actions: ['update'], before, after, before_sensitive: {}, after_sensitive: {} },
+  })
+  const plan = (before: unknown, after: unknown): Plan => ({ resource_changes: [change(before, after)] })
+  const attrNames = (before: unknown, after: unknown) =>
+    (summarize(plan(before, after)).summary[0].attrs ?? []).map((a) => a.name)
+
+  it('drops the null-leaved timeouts block and keeps the real change (Brunswick fleet shape)', () => {
+    const r = summarize(plan({ tags: { env: 'dev' }, timeouts: NULLS }, { tags: { env: 'prod' }, timeouts: null }))
+    expect(r.summary[0].attrs).toEqual([{ name: 'tags', before: '{"env":"dev"}', after: '{"env":"prod"}' }])
+    expect([r.changed, r.drifted]).toEqual([1, true])
+  })
+
+  it.each([
+    ['object of nulls vs null', NULLS, null],
+    ['null vs object of nulls', null, NULLS],
+    ['object of nulls vs absent', NULLS, undefined],
+    ['list of an object of nulls vs null', [NULLS], null],
+    ['nested null leaves vs null', { create: null, x: { y: [null, null] } }, null],
+    ['two null-leaved objects of different shapes', { create: null }, NULLS],
+  ])('ignores %s', (_name, before, after) => {
+    const b: Record<string, unknown> = { name: 'a' }
+    const a: Record<string, unknown> = { name: 'a' }
+    if (before !== undefined) b.timeouts = before
+    if (after !== undefined) a.timeouts = after
+    expect(attrNames(b, a)).toEqual([])
+  })
+
+  it.each([
+    ['a configured timeout removed', { ...NULLS, create: '30m' }, null],
+    ['a configured timeout added', NULLS, { ...NULLS, create: '60m' }],
+    ['an empty-string leaf', { create: '' }, null],
+    ['a false leaf', { create: false }, null],
+    ['an empty object vs null', {}, null],
+    ['an empty list vs null', [], null],
+    ['an empty list vs a list of nulls', [], [NULLS]],
+    ['a nested empty object', { create: null, x: {} }, null],
+  ])('still reports %s', (_name, before, after) => {
+    expect(attrNames({ timeouts: before }, { timeouts: after })).toEqual(['timeouts'])
+  })
+
+  it('applies to the timeouts key only', () => {
+    expect(attrNames({ retention_policy: { days: null } }, { retention_policy: null })).toEqual(['retention_policy'])
+    expect(attrNames({ ips: null }, { ips: [null] })).toEqual(['ips'])
+  })
+
+  it('an ignored timeouts difference is not counted as an omitted attr', () => {
+    // The cap counts keys KNOWN to have changed; a value-free timeouts shape
+    // difference is not one, so it must not mark the summary truncated.
+    const hidden = summarize(plan({ timeouts: NULLS }, { timeouts: null }), { maxAttrsPerEntry: 0 })
+    expect([hidden.omitted_attrs, hidden.truncated]).toEqual([0, false])
+    const shown = summarize(plan({ timeouts: { create: '30m' } }, { timeouts: null }), { maxAttrsPerEntry: 0 })
+    expect([shown.omitted_attrs, shown.truncated]).toEqual([1, true])
+  })
+
+  it('runs through resource_drift with the same rule', () => {
+    const r = summarize({ resource_changes: [], resource_drift: [change({ timeouts: NULLS }, { timeouts: null })] })
+    expect(r.drift_summary).toEqual([{ address: 'azurerm_subnet.a', actions: ['update'] }])
+    expect(r.drift_changed).toBe(1)
+  })
+
+  it('no nesting depth makes the walk throw', () => {
+    // A recursive walk overflows the stack at roughly 10,000 levels; JSON.parse
+    // accepts far deeper documents, so this must be iterative (see stableStringify).
+    const depth = 50_000
+    const deep = (leaf: string) => JSON.parse('['.repeat(depth) + leaf + ']'.repeat(depth))
+    expect(attrNames({ timeouts: deep('null') }, { timeouts: null })).toEqual([])
+    expect(attrNames({ timeouts: deep('"30m"') }, { timeouts: null })).toEqual(['timeouts'])
+  })
+})
+
 describe('fmt + isSens (verbatim parity helpers)', () => {
   it('fmt passes strings through, compacts+sorts objects, truncates at 300 with U+2026', () => {
     expect(fmt(null)).toBeNull()

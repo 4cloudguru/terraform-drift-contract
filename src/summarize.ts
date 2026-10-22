@@ -18,7 +18,10 @@
 //   - for in-place updates/replaces (before & after both objects), emit `attrs`:
 //     the top-level keys whose value differs, with before/after run through
 //     fmt() (300-char truncation, U+2026 marker) and masked to the literal
-//     "(sensitive)" when before_sensitive/after_sensitive marks them.
+//     "(sensitive)" when before_sensitive/after_sensitive marks them;
+//   - the top-level `timeouts` key is not a change when BOTH sides are
+//     null-equivalent (null, absent, or a non-empty object/list of nulls) — see
+//     `nullEquivalent`. Every other key compares by value alone.
 //
 // terraform -json does NOT mask sensitive values (only human output does), so
 // masking happens here, BEFORE fmt(), so a marked secret never reaches the
@@ -365,6 +368,32 @@ function own(o: Record<string, unknown>, k: string): unknown {
   return Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined
 }
 
+/** The one top-level key `nullEquivalent` is applied to. */
+const TIMEOUTS_KEY = 'timeouts'
+
+/** Null, absent, or a NON-EMPTY object or array whose every member is itself
+ *  null or null-equivalent: a value that carries no value anywhere in it.
+ *
+ *  An empty object or array is NOT null-equivalent. Plan JSON drops an unknown
+ *  object member and writes an unknown list element as null, so an empty object
+ *  on the `after` side can be an object whose every member is known only after
+ *  apply, and terraform itself treats `[]` and null as different values.
+ *
+ *  Iterative for the reason `stableStringify` is: the value is
+ *  attacker-influenced, and no depth may make this throw. */
+function nullEquivalent(v: unknown): boolean {
+  const stack: unknown[] = [v]
+  while (stack.length > 0) {
+    const x = stack.pop()
+    if (x === null || x === undefined) continue
+    if (typeof x !== 'object') return false
+    const members = Array.isArray(x) ? x : Object.values(x as Record<string, unknown>)
+    if (members.length === 0) return false
+    for (const m of members) stack.push(m)
+  }
+  return true
+}
+
 function has(actions: string[], action: string): boolean {
   return Array.isArray(actions) && actions.includes(action)
 }
@@ -482,6 +511,24 @@ function processChanges(changes: ResourceChange[], maxEntries: number, maxAttrsP
         const bCanon = stableStringify(bv)
         const aCanon = stableStringify(av)
         if (bCanon === aCanon) continue
+        // `timeouts` is terraform-plugin-sdk's operation-timeouts meta-attribute,
+        // not resource state: the SDK keeps it out of the attribute diff and
+        // copies the configured value into the planned state. So a state can
+        // carry the unconfigured block as an object of nulls
+        // (`{"create":null,"delete":null,"read":null,"update":null}`) while the
+        // plan's `after` has null. On its own that difference plans no change,
+        // yet this loop reported it as a changed attribute of every resource that
+        // changed for another reason. When neither side carries a value it is
+        // not a change.
+        //
+        // Scoped to this key on purpose. For any other key a null-leaved value
+        // can be real: plan JSON writes an unknown list element as null and this
+        // package does not read `after_unknown`, so a list of nulls on the
+        // `after` side can be values known only after apply; and an object of
+        // nulls where the other side is null is an empty block that is present
+        // where it was absent. A `timeouts` value with any non-null leaf is still
+        // a change.
+        if (k === TIMEOUTS_KEY && nullEquivalent(bv) && nullEquivalent(av)) continue
         // Past the cap the key is still known to have CHANGED — the diff above
         // has already run — so it is counted, not concealed. Only the formatting
         // is skipped, which is the expensive half.

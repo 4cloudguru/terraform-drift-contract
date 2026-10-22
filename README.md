@@ -116,7 +116,15 @@ truncation and masking caveats apply to them as to `attrs`.
   secret nested under an unmarked top-level key is serialised whole, and a plan
   that omits the sensitivity mirrors gets no masking at all for that resource.
   Do not treat this as a redaction guarantee for plans of unknown or untrusted
-  provenance — see [SECURITY.md](SECURITY.md);
+  provenance — see [SECURITY.md](SECURITY.md).
+  **One key is compared by more than value:** `timeouts`, the SDK's
+  operation-timeouts meta-attribute, is not a change when both sides are
+  *null-equivalent* — null, absent, or a non-empty object/list whose every leaf
+  is null (a state's `{"create":null,"delete":null,"read":null,"update":null}`
+  against a plan's `null`). A `timeouts` value with any non-null leaf, or an
+  empty object/list, is still a change, and every other key compares by value
+  alone: for those a null-leaved value can be an empty block that is now present,
+  or list elements known only after apply;
 - `drifted` = `(added + changed + destroyed) > 0` (a pure replace has
   `changed == 0` but `drifted == true`; do not infer "no drift" from
   `changed == 0`);
