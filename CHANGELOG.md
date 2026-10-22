@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.2](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.4.1...v1.4.2) (2026-10-22)
+
+
+### Bug Fixes
+
+* **summarize:** ignore a value-free timeouts block in attrs ([#107](https://github.com/4cloudguru/terraform-drift-contract/issues/107)) ([75e30d8](https://github.com/4cloudguru/terraform-drift-contract/commit/75e30d8c7b6574fc89a5f3938528d3da75522536))
+
 ## [1.4.1](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.4.0...v1.4.1) (2026-09-09)
 
 
