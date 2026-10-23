@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.4.2...v1.5.0) (2026-10-23)
+
+
+### Features
+
+* **summarize:** per-path attrs, and mask only what a mirror marks ([#112](https://github.com/4cloudguru/terraform-drift-contract/issues/112)) ([33eafef](https://github.com/4cloudguru/terraform-drift-contract/commit/33eafef7fd92eda7987ba54d5bcbad8bc658c24d))
+
 ## [1.4.2](https://github.com/4cloudguru/terraform-drift-contract/compare/v1.4.1...v1.4.2) (2026-10-22)
 
 
