@@ -90,7 +90,7 @@ describe('summarize — timeouts null-equivalence', () => {
 
   it('drops the null-leaved timeouts block and keeps the real change (Brunswick fleet shape)', () => {
     const r = summarize(plan({ tags: { env: 'dev' }, timeouts: NULLS }, { tags: { env: 'prod' }, timeouts: null }))
-    expect(r.summary[0].attrs).toEqual([{ name: 'tags', before: '{"env":"dev"}', after: '{"env":"prod"}' }])
+    expect(r.summary[0].attrs).toEqual([{ name: 'tags.env', before: 'dev', after: 'prod' }])
     expect([r.changed, r.drifted]).toEqual([1, true])
   })
 
@@ -110,16 +110,17 @@ describe('summarize — timeouts null-equivalence', () => {
   })
 
   it.each([
-    ['a configured timeout removed', { ...NULLS, create: '30m' }, null],
-    ['a configured timeout added', NULLS, { ...NULLS, create: '60m' }],
-    ['an empty-string leaf', { create: '' }, null],
-    ['a false leaf', { create: false }, null],
-    ['an empty object vs null', {}, null],
-    ['an empty list vs null', [], null],
-    ['an empty list vs a list of nulls', [], [NULLS]],
-    ['a nested empty object', { create: null, x: {} }, null],
-  ])('still reports %s', (_name, before, after) => {
-    expect(attrNames({ timeouts: before }, { timeouts: after })).toEqual(['timeouts'])
+    ['a configured timeout removed', { ...NULLS, create: '30m' }, null, 'timeouts'],
+    // Both sides are objects, so the change is reported at the member that holds it.
+    ['a configured timeout added', NULLS, { ...NULLS, create: '60m' }, 'timeouts.create'],
+    ['an empty-string leaf', { create: '' }, null, 'timeouts'],
+    ['a false leaf', { create: false }, null, 'timeouts'],
+    ['an empty object vs null', {}, null, 'timeouts'],
+    ['an empty list vs null', [], null, 'timeouts'],
+    ['an empty list vs a list of nulls', [], [NULLS], 'timeouts'],
+    ['a nested empty object', { create: null, x: {} }, null, 'timeouts'],
+  ])('still reports %s', (_name, before, after, row) => {
+    expect(attrNames({ timeouts: before }, { timeouts: after })).toEqual([row])
   })
 
   it('applies to the timeouts key only', () => {
@@ -262,7 +263,7 @@ const rows: Row[] = [
     want: [{ name: 'instance_type', before: 't3.micro', after: 't3.large' }],
   },
   {
-    name: 'attrs: nested/structured mark on one side only → masked',
+    name: 'attrs: nested/structured mark on one side only → that member masked on both sides',
     got: () =>
       attrsOf(
         update({
@@ -271,7 +272,98 @@ const rows: Row[] = [
           after_sensitive: { tags: { token: true } },
         }),
       ),
-    want: [{ name: 'tags', before: '(sensitive)', after: '(sensitive)' }],
+    want: [{ name: 'tags.token', before: '(sensitive)', after: '(sensitive)' }],
+  },
+  {
+    // A sensitive variable in a map: terraform marks the element, not the map.
+    name: 'attrs: a marked map element is masked; its unmarked siblings are shown',
+    got: () =>
+      attrsOf(
+        update({
+          before: { tags: { PLAIN: 'x', SECRET: SECRET } },
+          after: { tags: { PLAIN: 'y', SECRET: 'TOKEN-NEW-def456' } },
+          before_sensitive: { tags: {} },
+          after_sensitive: { tags: { SECRET: true } },
+        }),
+      ),
+    want: [
+      { name: 'tags.PLAIN', before: 'x', after: 'y' },
+      { name: 'tags.SECRET', before: '(sensitive)', after: '(sensitive)' },
+    ],
+  },
+  {
+    // azurerm 4.81 linux_web_app: docker_registry_password is the one sensitive
+    // leaf, three blocks deep.
+    name: 'attrs: a sensitive leaf deep in nested blocks is masked; the block is not',
+    got: () =>
+      attrsOf(
+        update({
+          before: { site_config: [{ always_on: true, application_stack: [{ docker_image_name: 'a:1', docker_registry_password: SECRET }] }] },
+          after: { site_config: [{ always_on: false, application_stack: [{ docker_image_name: 'a:2', docker_registry_password: 'TOKEN-NEW-def456' }] }] },
+          before_sensitive: { site_config: [{ application_stack: [{ docker_registry_password: true }] }] },
+          after_sensitive: { site_config: [{ application_stack: [{ docker_registry_password: true }] }] },
+        }),
+      ),
+    want: [
+      { name: 'site_config[0].always_on', before: 'true', after: 'false' },
+      { name: 'site_config[0].application_stack[0].docker_image_name', before: 'a:1', after: 'a:2' },
+      { name: 'site_config[0].application_stack[0].docker_registry_password', before: '(sensitive)', after: '(sensitive)' },
+    ],
+  },
+  {
+    // The whole map is sensitive: its KEYS must not appear as row names either.
+    name: 'attrs: a whole-map mark hides the keys, not just the values',
+    got: () =>
+      attrsOf(
+        update({
+          before: { app_settings: { [SECRET]: '1' } },
+          after: { app_settings: { [SECRET]: '2' } },
+          after_sensitive: { app_settings: true },
+        }),
+      ),
+    want: [{ name: 'app_settings', before: '(sensitive)', after: '(sensitive)' }],
+  },
+  {
+    name: 'attrs: a marked member of a list of different lengths masks the whole list',
+    got: () =>
+      attrsOf(
+        update({
+          before: { connection: [{ name: 'a', value: SECRET }] },
+          after: { connection: [{ name: 'a', value: SECRET }, { name: 'b', value: 'v' }] },
+          before_sensitive: { connection: [{ value: true }] },
+          after_sensitive: { connection: [{}, {}] },
+        }),
+      ),
+    want: [{ name: 'connection', before: '(sensitive)', after: '(sensitive)' }],
+  },
+  {
+    name: 'attrs: a mark under a mirror of the wrong shape masks the whole value',
+    got: () =>
+      attrsOf(
+        update({
+          before: { creds: { user: 'u', pass: SECRET } },
+          after: { creds: { user: 'v', pass: 'p' } },
+          before_sensitive: { creds: [{ pass: true }] },
+          after_sensitive: { creds: {} },
+        }),
+      ),
+    want: [{ name: 'creds', before: '(sensitive)', after: '(sensitive)' }],
+  },
+  {
+    name: 'attrs: an expansion stopped by the depth bound masks the remainder whole',
+    got: () => {
+      // 20 levels; the secret's mark sits below the depth bound.
+      let b: unknown = { s: SECRET }
+      let a: unknown = { s: 'new' }
+      let m: unknown = { s: true }
+      for (let i = 0; i < 20; i++) {
+        b = { n: b }
+        a = { n: a }
+        m = { n: m }
+      }
+      return attrsOf(update({ before: { deep: b }, after: { deep: a }, before_sensitive: { deep: m }, after_sensitive: {} }))
+    },
+    want: [{ name: 'deep' + '.n'.repeat(16), before: '(sensitive)', after: '(sensitive)' }],
   },
   {
     name: 'attrs: whole-value mark on one side only (before_sensitive: true) → masked',

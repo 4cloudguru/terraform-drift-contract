@@ -16,9 +16,14 @@
 //     "update"), matching terraform's "X to add, Y to change, Z to destroy";
 //   - drifted = (added + changed + destroyed) > 0;
 //   - for in-place updates/replaces (before & after both objects), emit `attrs`:
-//     the top-level keys whose value differs, with before/after run through
+//     one row per changed PATH. A top-level key whose values differ is one row,
+//     unless both sides are objects, or arrays of one length — then each
+//     differing member is its own row, recursively, named like a terraform
+//     path (`tags.COST_CENTER`, `blob_properties[0].delete_retention_policy[0].days`,
+//     `tags["kubernetes.io/role"]`) — bounded by MAX_ATTR_PATH_DEPTH and
+//     MAX_ATTR_PATH_CODE_POINTS (see `walkAttr`). before/after are run through
 //     fmt() (300-char truncation, U+2026 marker) and masked to the literal
-//     "(sensitive)" when before_sensitive/after_sensitive marks them;
+//     "(sensitive)" when before_sensitive/after_sensitive marks that path;
 //   - the top-level `timeouts` key is not a change when BOTH sides are
 //     null-equivalent (null, absent, or a non-empty object/list of nulls) — see
 //     `nullEquivalent`. Every other key compares by value alone.
@@ -27,17 +32,24 @@
 // masking happens here, BEFORE fmt(), so a marked secret never reaches the
 // formatter.
 //
-// TWO PRECONDITIONS on that, both load-bearing and neither optional:
-//   - it is per TOP-LEVEL changed key. isSens() is evaluated against
-//     ch.before_sensitive[k] / ch.after_sensitive[k] only, never against a
-//     nested path inside an unmarked key's value — a secret nested under an
-//     unmarked key is serialised whole;
-//   - it is driven ENTIRELY by that metadata. When a plan carries neither
-//     mirror, nothing is masked for that resource. That is deliberate and
-//     fail-open (masking it would mask every attribute of every such plan, and
-//     would diverge from the Go mirror, which fails open identically); it is
-//     pinned by a test row and documented in SECURITY.md. It is NOT a guarantee
-//     that holds for plans of unknown provenance.
+// A path is masked when a mirror holds a truthy scalar (terraform writes `true`)
+// at it, above it or below it — see `marks` and `covers`. An empty container is
+// not a mark, and neither is a container of `false`s or `{}`s, which terraform
+// writes for every nested block and list whether or not anything in it is
+// sensitive: until v1.5.0 any non-empty container masked the whole top-level
+// key, so `blob_properties` and `address_space` rendered `(sensitive)` with
+// nothing sensitive in them (Brunswick fleet, 2026-10-22). A value a mirror
+// marks anywhere in the change is also masked wherever else it appears in it —
+// see `MarkedValues`: marks follow paths, and values move between them.
+//
+// ONE PRECONDITION on that, load-bearing and not optional: it is driven
+// ENTIRELY by that metadata. When a plan carries neither mirror, nothing is
+// masked for that resource. That is deliberate and fail-open (masking it would
+// mask every attribute of every such plan, and would diverge from the Go mirror,
+// which fails open identically); it is pinned by a test row and documented in
+// SECURITY.md. It is NOT a guarantee that holds for plans of unknown provenance.
+// A secret that neither mirror marks, at its path or elsewhere in the change, is
+// emitted, at any depth.
 //
 // An attribute is masked when EITHER side marks it sensitive. This was a
 // deliberate divergence when it landed in v1.1.0; the Go driftingest took the
@@ -56,6 +68,9 @@
 // or `summary`.
 
 export interface AttrChange {
+  /** The changed path: a top-level attribute name, followed by `.key`,
+   *  `["key"]` or `[index]` segments when the change was expanded into the
+   *  members of an object or array value. Never truncated. */
   name: string
   /** fmt(value) | "(sensitive)" | null */
   before: string | null
@@ -118,7 +133,7 @@ export const DEFAULT_MAX_ATTRS_PER_ENTRY = 50
 export interface SummarizeOptions {
   /** Summary rows to emit. Counts are NOT capped — see `Result.omitted_entries`. */
   maxEntries?: number
-  /** Changed attributes to emit per row — see `Result.omitted_attrs`. */
+  /** `attrs` rows (changed paths) to emit per summary entry — see `Result.omitted_attrs`. */
   maxAttrsPerEntry?: number
 }
 
@@ -168,7 +183,7 @@ export interface Result {
   /** Summary rows dropped by `maxEntries`. The COUNTS still include them, so
    *  `drifted` stays truthful when the summary is capped. */
   omitted_entries: number
-  /** Changed attributes dropped by `maxAttrsPerEntry`, across all rows. */
+  /** `attrs` rows (changed paths) dropped by `maxAttrsPerEntry`, across all entries. */
   omitted_attrs: number
 }
 
@@ -311,9 +326,7 @@ function stableStringify(v: unknown): string {
  *  be serialised, or literal text already decided. */
 type StringifyWork = { lit: string } | { val: unknown }
 
-/** The 300-code-point cap, split out so a caller that has already computed a
- *  value's canonical form can reach the truncation without serialising it a
- *  second time. The public `fmt` below is unchanged in behaviour. */
+/** The 300-code-point cap applied by `fmt`. */
 function truncate(s: string): string {
   // A UTF-16 length <= 300 implies a code-point length <= 300 (a code point is
   // never fewer than one unit), so this returns exactly what the path below
@@ -336,30 +349,90 @@ export function fmt(v: unknown): string | null {
   return truncate(typeof v === 'string' ? v : stableStringify(v))
 }
 
-/** `fmt` for a value whose `stableStringify` form the caller already has.
- *  Identical output to `fmt(v)` by construction — the only difference is that it
- *  does not serialise `v` again. */
-function fmtCanon(v: unknown, canon: string): string | null {
-  if (v === null || v === undefined) return null
-  return truncate(typeof v === 'string' ? v : canon)
+/** The canonical `isSens`: whether the sensitivity mirror marks any part of the
+ *  top-level key `k`. before_sensitive/after_sensitive mirror the value's shape,
+ *  and a mark is a truthy scalar — terraform writes `true` — at any depth under
+ *  `k`. A mirror that is not an object is the whole-value flag and marks every
+ *  key when truthy.
+ *
+ *  A container with no truthy scalar in it is NOT a mark. Terraform writes one
+ *  for every nested block and every list, sensitive or not: an azurerm 4.81
+ *  `blob_properties` with nothing sensitive in it is
+ *  `[{"container_delete_retention_policy":[{}],"cors_rule":[],"delete_retention_policy":[{}],"restore_policy":[]}]`,
+ *  and a two-element `address_space` is `[false,false]`. Up to v1.4.2 a
+ *  non-empty container masked the key, so every such attribute rendered
+ *  `(sensitive) -> (sensitive)`.
+ *
+ *  True does not mean the whole attribute is masked: `summarize` masks the
+ *  marked paths inside it, and emits the rest. See `walkAttr`. */
+export function isSens(sens: unknown, k: string): boolean {
+  return marks(mirrorFor(sens, k))
 }
 
-/** The canonical `isSens`: before_sensitive/after_sensitive mirror the value
- *  shape; true (or a non-empty nested object/array) → mask. */
-export function isSens(sens: unknown, k: string): boolean {
-  if (typeof sens !== 'object' || sens === null || Array.isArray(sens)) {
-    return pyBool(sens)
+/** The mirror node for top-level key `k`: own member `k` of an object mirror,
+ *  or, for a whole-value flag, that flag's truthiness applied to every key.
+ *
+ *  hasOwnProperty (through `own`), not a bare read: `sens[k]` consults
+ *  Object.prototype, so any other package sharing the process could influence
+ *  the central predicate of a redaction control by writing to it. Pollution can
+ *  only ever OVER-mask here, because an own JSON property always shadows an
+ *  inherited one, so this is hardening rather than a disclosure fix — but a
+ *  redaction predicate should not be one prototype read away from another
+ *  package's state, and both consumers bundle this alongside other code. */
+function mirrorFor(sens: unknown, k: string): unknown {
+  if (kindOf(sens) !== 'object') return pyBool(sens)
+  return own(sens as Record<string, unknown>, k)
+}
+
+/** The three shapes the masking walk tells apart. Null and absent are scalars. */
+type Kind = 'object' | 'array' | 'scalar'
+
+function kindOf(v: unknown): Kind {
+  if (Array.isArray(v)) return 'array'
+  return v !== null && typeof v === 'object' ? 'object' : 'scalar'
+}
+
+/** A mirror subtree marks its value when it holds a truthy scalar anywhere —
+ *  Python truthiness, as for the whole-value flag. Terraform only ever writes
+ *  `true`; reading any truthy scalar as a mark is the fail-closed reading of a
+ *  mirror that is not terraform's (up to v1.4.2 `{"pw":"yes"}` masked nothing).
+ *
+ *  Iterative for the reason `stableStringify` is: the mirror is as
+ *  attacker-influenced as the value, and no depth may make this throw. */
+function marks(m: unknown): boolean {
+  const stack: unknown[] = [m]
+  while (stack.length > 0) {
+    const x = stack.pop()
+    if (x !== null && typeof x === 'object') {
+      for (const c of Array.isArray(x) ? x : Object.values(x as Record<string, unknown>)) stack.push(c)
+    } else if (pyBool(x)) {
+      return true
+    }
   }
-  // hasOwnProperty, not a bare read: `sens[k]` consults Object.prototype, so any
-  // other package sharing the process can influence the central predicate of a
-  // redaction control by writing to it. Verified before and after: pollution can
-  // only ever OVER-mask here, because an own JSON property always shadows an
-  // inherited one — so this is hardening, not a disclosure fix. A redaction
-  // predicate should still not be one prototype read away from another
-  // package's state, and both consumers bundle this alongside other code.
-  if (!Object.prototype.hasOwnProperty.call(sens, k)) return false
-  const sv = (sens as Record<string, unknown>)[k]
-  return sv === true || (typeof sv === 'object' && sv !== null && pyBool(sv))
+  return false
+}
+
+/** The mirror node `m` masks ALL of value `v`, not a part of it: a truthy scalar
+ *  (terraform's mark on a whole value, block or collection), or a mark under a
+ *  mirror whose shape is not the value's. The second case is not terraform
+ *  output; it cannot be aligned with the value member by member, so it is
+ *  applied to the whole of it rather than lost by the walk below. */
+function covers(m: unknown, v: unknown): boolean {
+  const mk = kindOf(m)
+  if (mk === 'scalar') return pyBool(m)
+  return mk !== kindOf(v) && marks(m)
+}
+
+/** The mirror node for one member of a container value of kind `kind`. A mirror
+ *  of another shape has no aligned member, so it yields undefined — which is
+ *  safe only because `covers` has already masked the whole value whenever such
+ *  a mirror marks anything. An index past a mirror array's end is undefined
+ *  rather than a prototype read. */
+function mirrorChild(m: unknown, kind: Kind, key: string | number): unknown {
+  if (kind === 'array') {
+    return Array.isArray(m) && (key as number) < m.length ? m[key as number] : undefined
+  }
+  return kindOf(m) === 'object' ? own(m as Record<string, unknown>, key as string) : undefined
 }
 
 /** An own-property read. A bare `o[k]` walks the prototype chain, which for the
@@ -367,6 +440,324 @@ export function isSens(sens: unknown, k: string): boolean {
 function own(o: Record<string, unknown>, k: string): unknown {
   return Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined
 }
+
+/** How far a changed attribute is expanded into per-path rows: at most this many
+ *  path segments below the top-level key, and no row name longer than this many
+ *  code points. Past either bound the node is emitted as one row holding its
+ *  whole value. Contract numbers, declared in `conformance/vectors.json` under
+ *  `limits` beside the summary bounds and asserted by every implementation.
+ *
+ *  The depth bound is also the cost bound: each expanded level serialises its
+ *  members once more, so a value is serialised at most 1 + MAX_ATTR_PATH_DEPTH
+ *  times however it nests. 16 covers the deepest blocks in common providers
+ *  (azurerm blob_properties needs 4, an AWS WAF statement about 15). The name
+ *  bound is needed because map keys are configuration data: a `tags` key can be
+ *  any length, and a row name is never truncated (it is the row's identity). */
+export const MAX_ATTR_PATH_DEPTH = 16
+export const MAX_ATTR_PATH_CODE_POINTS = 300
+
+/** A terraform identifier, rendered as `.key`. Every other key is rendered as a
+ *  quoted index, `["key"]`, so a name parses back to one path: `.` and `[` never
+ *  appear in a dotted segment, and a quoted one is a JSON string literal. */
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+function keySegment(k: string): string {
+  return IDENTIFIER.test(k) ? `.${k}` : `[${jsonString(k)}]`
+}
+
+/** Code points in `s`, counted only as far as the 300 bound needs: a UTF-16
+ *  length within it is within it in code points, and a code point is at most two
+ *  units, so a length past twice it is past it. */
+function withinNameBound(s: string): boolean {
+  if (s.length <= MAX_ATTR_PATH_CODE_POINTS) return true
+  if (s.length > 2 * MAX_ATTR_PATH_CODE_POINTS) return false
+  let n = 0
+  for (const _ of s) if (++n > MAX_ATTR_PATH_CODE_POINTS) return false
+  return true
+}
+
+/** Whether two values have the same canonical form — `stableStringify(x) ===
+ *  stableStringify(y)`, which is the comparison every diff in this file makes —
+ *  decided structurally, without building either string.
+ *
+ *  The walk compares the members of every expanded level, so building the
+ *  strings cost one full serialisation of a value per level of nesting above it.
+ *  A first version also kept them, for about 17 live copies of a deep value: a
+ *  256 MiB plan aborted the process out of memory, which cannot be caught,
+ *  before the drift callback fired. Building and dropping them still peaked at
+ *  2.5x the memory and 25x the time of v1.4.2 on that plan.
+ *
+ *  It is exactly the string comparison, case by case, and a property test holds
+ *  it to that: null, absent and a non-finite number (JSON.parse reads `1e400` as
+ *  Infinity) all serialise as `null`; a finite number is its shortest
+ *  round-trip form, unique per double, except that `-0` is kept apart from `0`;
+ *  strings, booleans, arrays and objects compare as their JSON does, objects by
+ *  own key set. Iterative, and it stops at the first difference. Exported from
+ *  this module (not the package) for that test only. */
+export function sameCanon(x: unknown, y: unknown): boolean {
+  const stack: Array<[unknown, unknown]> = [[x, y]]
+  while (stack.length > 0) {
+    const [a, b] = stack.pop() as [unknown, unknown]
+    const kind = canonKind(a)
+    if (kind !== canonKind(b)) return false
+    switch (kind) {
+      case 'null':
+        break
+      case 'number':
+        if (!Object.is(a, b)) return false
+        break
+      case 'array': {
+        const aa = a as unknown[]
+        const ba = b as unknown[]
+        if (aa.length !== ba.length) return false
+        for (let i = 0; i < aa.length; i++) stack.push([aa[i], ba[i]])
+        break
+      }
+      case 'object': {
+        const ao = a as Record<string, unknown>
+        const bo = b as Record<string, unknown>
+        const keys = Object.keys(ao)
+        if (keys.length !== Object.keys(bo).length) return false
+        for (const k of keys) {
+          if (!Object.prototype.hasOwnProperty.call(bo, k)) return false
+          stack.push([ao[k], bo[k]])
+        }
+        break
+      }
+      case 'other':
+        // Nothing JSON.parse produces; fall back to the definition itself.
+        if (stableStringify(a) !== stableStringify(b)) return false
+        break
+      default:
+        // string, boolean
+        if (a !== b) return false
+    }
+  }
+  return true
+}
+
+/** The class `stableStringify` serialises a value in, for `sameCanon`. */
+function canonKind(v: unknown): 'null' | 'number' | 'string' | 'boolean' | 'array' | 'object' | 'other' {
+  if (v === null || v === undefined) return 'null'
+  if (typeof v === 'number') return Number.isFinite(v) ? 'number' : 'null'
+  if (typeof v === 'string') return 'string'
+  if (typeof v === 'boolean') return 'boolean'
+  if (Array.isArray(v)) return 'array'
+  return typeof v === 'object' ? 'object' : 'other'
+}
+
+/** One differing member of a container pair. */
+interface Member {
+  key: string | number
+  name: string
+  b: unknown
+  a: unknown
+}
+
+/** The members of `b`/`a` whose values differ, or null when the pair is not
+ *  expanded: they are not both objects or both arrays of one length, nothing
+ *  differs member by member (the difference is a null member against an absent
+ *  one, which only the whole value shows), a member's name is past the bound, or
+ *  a member's KEY is a marked value (see `MarkedValues`), which a row name would
+ *  carry out in the clear.
+ *
+ *  Absent and null are the same member value, exactly as for top-level keys;
+ *  object members are read own-only and in code-point order, for the reasons
+ *  given at the top-level loop. */
+function differingMembers(name: string, b: unknown, a: unknown, marked: MarkedValues): Member[] | null {
+  const kind = kindOf(b)
+  if (kind === 'scalar' || kind !== kindOf(a)) return null
+  const out: Member[] = []
+  if (kind === 'array') {
+    const ba = b as unknown[]
+    const aa = a as unknown[]
+    if (ba.length !== aa.length) return null
+    for (let i = 0; i < ba.length; i++) {
+      if (sameCanon(ba[i], aa[i])) continue
+      const childName = `${name}[${i}]`
+      if (!withinNameBound(childName)) return null
+      out.push({ key: i, name: childName, b: ba[i], a: aa[i] })
+    }
+  } else {
+    const bo = b as Record<string, unknown>
+    const ao = a as Record<string, unknown>
+    for (const k of Array.from(new Set([...Object.keys(bo), ...Object.keys(ao)])).sort(compareCodePoints)) {
+      const bv = own(bo, k)
+      const av = own(ao, k)
+      if (sameCanon(bv, av)) continue
+      const childName = name + keySegment(k)
+      if (!withinNameBound(childName) || isMarked(marked, k)) return null
+      out.push({ key: k, name: childName, b: bv, a: av })
+    }
+  }
+  return out.length > 0 ? out : null
+}
+
+/** Every value a mirror marks anywhere in one resource change, so that it is
+ *  masked wherever ELSE in the change it appears — at another index, under
+ *  another key, in another attribute, or as a map key.
+ *
+ *  Marks are aligned by path, and a value can change path between the two
+ *  sides. terraform's refresh re-applies prior marks by path, so after an
+ *  out-of-band reorder of `["S3CR3T","x"]` to `["x","S3CR3T"]` the mark stays on
+ *  index 0 and the secret sits unmarked at index 1; a key renamed alongside a
+ *  config-derived mark (`DB_PASS` unmarked before, `DB_PASSWORD` marked after)
+ *  is the same shape. Path masking alone emitted the secret on the unmarked
+ *  side, where v1.4.2 masked the whole attribute.
+ *
+ *  Holds non-empty strings and numbers, tagged by type so the string "1" and the
+ *  number 1 stay distinct, and map keys as strings. null, booleans and the empty
+ *  string carry no secret and are everywhere, so they are not held: masking every
+ *  `""` in a change because one marked value was empty would hide real drift.
+ *  A value that merely CONTAINS a marked one is not masked. */
+type MarkedValues = Set<string>
+
+/** The `MarkedValues` entry for a scalar or a map key, or null when it holds none. */
+function markedKey(v: unknown): string | null {
+  if (typeof v === 'string') return v.length > 0 ? `s${v}` : null
+  if (typeof v === 'number') return `n${stableStringify(v)}`
+  return null
+}
+
+function isMarked(marked: MarkedValues, v: unknown): boolean {
+  const mk = markedKey(v)
+  return mk !== null && marked.has(mk)
+}
+
+/** Adds what `mirror` marks under `value` — same path, either side's mirror —
+ *  to `marked`. Walks only where the mirror is a container of the value's kind,
+ *  by the mirror's own members, so it costs the size of the mirror plus that of
+ *  the values it covers. Iterative: both are attacker-influenced. */
+function collectMarked(marked: MarkedValues, value: unknown, mirror: unknown): void {
+  const stack: Array<[unknown, unknown]> = [[value, mirror]]
+  while (stack.length > 0) {
+    const [v, m] = stack.pop() as [unknown, unknown]
+    if (covers(m, v)) {
+      addAllValues(marked, v)
+      continue
+    }
+    // Not covered: a mirror of another shape holds no mark, and a scalar
+    // mirror is falsy, so nothing under this value is marked.
+    const kind = kindOf(v)
+    if (kind === 'scalar' || kindOf(m) !== kind) continue
+    if (kind === 'array') {
+      const va = v as unknown[]
+      const ma = m as unknown[]
+      for (let i = 0; i < Math.min(va.length, ma.length); i++) stack.push([va[i], ma[i]])
+    } else {
+      const vo = v as Record<string, unknown>
+      const mo = m as Record<string, unknown>
+      for (const k of Object.keys(mo)) if (Object.prototype.hasOwnProperty.call(vo, k)) stack.push([vo[k], mo[k]])
+    }
+  }
+}
+
+/** Adds every scalar and every map key under `v` to `marked`. Iterative. */
+function addAllValues(marked: MarkedValues, v: unknown): void {
+  const stack: unknown[] = [v]
+  while (stack.length > 0) {
+    const x = stack.pop()
+    if (x !== null && typeof x === 'object') {
+      if (Array.isArray(x)) {
+        for (const c of x) stack.push(c)
+      } else {
+        for (const k of Object.keys(x)) {
+          const mk = markedKey(k)
+          if (mk !== null) marked.add(mk)
+          stack.push((x as Record<string, unknown>)[k])
+        }
+      }
+    } else {
+      const mk = markedKey(x)
+      if (mk !== null) marked.add(mk)
+    }
+  }
+}
+
+/** Whether any scalar or map key under `v` is a marked value. Iterative. */
+function holdsMarked(marked: MarkedValues, v: unknown): boolean {
+  if (marked.size === 0) return false
+  const stack: unknown[] = [v]
+  while (stack.length > 0) {
+    const x = stack.pop()
+    if (x !== null && typeof x === 'object') {
+      if (Array.isArray(x)) {
+        for (const c of x) stack.push(c)
+      } else {
+        for (const k of Object.keys(x)) {
+          if (isMarked(marked, k)) return true
+          stack.push((x as Record<string, unknown>)[k])
+        }
+      }
+    } else if (isMarked(marked, x)) {
+      return true
+    }
+  }
+  return false
+}
+
+/** Where `walkAttr` puts its rows: formatted while fewer than `max`, counted in
+ *  `omitted` after that. `max` is set per top-level key (see processChanges). */
+interface AttrSink {
+  attrs: AttrChange[]
+  omitted: number
+  max: number
+  marked: MarkedValues
+}
+
+/** Emits the rows for one changed value at path `name`, given the before and
+ *  after mirror nodes at that same path (`mb` aligned with `b`, `ma` with `a`).
+ *
+ *  A node becomes ONE row when a mirror covers it — masked — or when it is not
+ *  expanded (see `differingMembers`, and the depth bound) — masked if either
+ *  mirror marks anything under it. Otherwise each differing member is walked as
+ *  its own row, in member order, so a re-tag reports `tags.COST_CENTER` and a
+ *  retention change reports `blob_properties[0].delete_retention_policy[0].days`
+ *  instead of two 300-code-point prefixes of the whole value.
+ *
+ *  The union rule holds at every node: both sides are masked when either
+ *  mirror covers or marks it. Every value reaches the output inside exactly one
+ *  row, at its own path or an ancestor's, and that row is masked whenever a mark
+ *  sits at, above or below that path in either mirror — above because the
+ *  ancestor was covered, below because `marks` reads the whole subtree — and
+ *  whenever it holds a value marked anywhere else in the change (`MarkedValues`).
+ *  A walked node always yields at least one row, so a top-level key reported
+ *  before is still reported.
+ *
+ *  Recursive, unlike the serializer: MAX_ATTR_PATH_DEPTH bounds the depth. */
+function walkAttr(sink: AttrSink, name: string, b: unknown, a: unknown, mb: unknown, ma: unknown, depth: number): void {
+  if (covers(mb, b) || covers(ma, a)) {
+    emitAttr(sink, name, true, b, a)
+    return
+  }
+  const members = depth < MAX_ATTR_PATH_DEPTH ? differingMembers(name, b, a, sink.marked) : null
+  if (members === null) {
+    emitAttr(sink, name, marks(mb) || marks(ma), b, a)
+    return
+  }
+  const kind = kindOf(b)
+  for (const m of members) {
+    walkAttr(sink, m.name, m.b, m.a, mirrorChild(mb, kind, m.key), mirrorChild(ma, kind, m.key), depth + 1)
+  }
+}
+
+/** One row, or one omitted row past the cap. Past it the row is still known to
+ *  have CHANGED, so it is counted, not concealed; only the formatting is skipped.
+ *  The mask runs before the formatter, so a masked value never reaches it. */
+function emitAttr(sink: AttrSink, name: string, masked: boolean, b: unknown, a: unknown): void {
+  if (sink.attrs.length >= sink.max) {
+    sink.omitted++
+    return
+  }
+  const sensitive = masked || holdsMarked(sink.marked, b) || holdsMarked(sink.marked, a)
+  sink.attrs.push({
+    name,
+    before: sensitive ? SENSITIVE : fmt(b),
+    after: sensitive ? SENSITIVE : fmt(a),
+  })
+}
+
+const SENSITIVE = '(sensitive)'
 
 /** The one top-level key `nullEquivalent` is applied to. */
 const TIMEOUTS_KEY = 'timeouts'
@@ -485,11 +876,22 @@ function processChanges(changes: ResourceChange[], maxEntries: number, maxAttrsP
       const as_ = ch.after_sensitive ?? {}
       const bObj = before as Record<string, unknown>
       const aObj = after as Record<string, unknown>
-      const attrs: AttrChange[] = []
       // Code-point order, not the default code-unit order: this is the order the
       // `attrs` array is emitted in, and the Go mirror's `sortedUnion` sorts
       // UTF-8 bytes — which is code-point order. See compareCodePoints.
-      for (const k of Array.from(new Set([...Object.keys(bObj), ...Object.keys(aObj)])).sort(compareCodePoints)) {
+      const keys = Array.from(new Set([...Object.keys(bObj), ...Object.keys(aObj)])).sort(compareCodePoints)
+      // Every value either mirror marks, on either side, at the same path —
+      // including attributes that did not change, since a marked value can turn
+      // up in one that did. See MarkedValues.
+      const marked: MarkedValues = new Set()
+      for (const k of keys) {
+        for (const m of [mirrorFor(bs, k), mirrorFor(as_, k)]) {
+          collectMarked(marked, own(bObj, k), m)
+          collectMarked(marked, own(aObj, k), m)
+        }
+      }
+      const changedKeys: string[] = []
+      for (const k of keys) {
         // The key set is the UNION, so one side is routinely missing the key —
         // and a bare `[k]` read on that side walks its prototype chain. For every
         // ordinary key that is undefined either way; for the literal key
@@ -502,15 +904,11 @@ function processChanges(changes: ResourceChange[], maxEntries: number, maxAttrsP
         // but concealing a diff is the wrong direction to fail in.
         const bv = own(bObj, k)
         const av = own(aObj, k)
-        // Serialised once per side. The equality check used to stringify both
-        // values and throw both strings away, and `fmt` then stringified the same
-        // two values again — four full serialisations per differing key where two
-        // suffice, on the dominant cost of this library. Comparing the CANONICAL
-        // forms (not the raw strings) is what keeps the string "1" distinct from
-        // the number 1, exactly as the previous deep-equality check did.
-        const bCanon = stableStringify(bv)
-        const aCanon = stableStringify(av)
-        if (bCanon === aCanon) continue
+        // Comparing the CANONICAL forms (not the raw strings) is what keeps the
+        // string "1" distinct from the number 1. A row that is emitted whole is
+        // serialised again by `fmt`; holding the canonical forms instead cost
+        // more memory than the second pass costs time (see sameCanon).
+        if (sameCanon(bv, av)) continue
         // `timeouts` is terraform-plugin-sdk's operation-timeouts meta-attribute,
         // not resource state: the SDK keeps it out of the attribute diff and
         // copies the configured value into the planned state. So a state can
@@ -529,13 +927,19 @@ function processChanges(changes: ResourceChange[], maxEntries: number, maxAttrsP
         // where it was absent. A `timeouts` value with any non-null leaf is still
         // a change.
         if (k === TIMEOUTS_KEY && nullEquivalent(bv) && nullEquivalent(av)) continue
-        // Past the cap the key is still known to have CHANGED — the diff above
-        // has already run — so it is counted, not concealed. Only the formatting
-        // is skipped, which is the expensive half.
-        if (attrs.length >= maxAttrsPerEntry) {
-          omittedAttrs++
-          continue
-        }
+        changedKeys.push(k)
+      }
+      const sink: AttrSink = { attrs: [], omitted: 0, max: 0, marked }
+      for (let i = 0; i < changedKeys.length; i++) {
+        const k = changedKeys[i]
+        // The row budget is shared by every changed path in the entry, so one
+        // key's expansion could take all of it: 50 changed keys in a map that
+        // sorts first hid every other attribute's change, where v1.4.2 gave each
+        // changed attribute a row. So each key leaves one row for every changed
+        // key after it, as long as it keeps one itself; past the cap a key's rows
+        // are counted in omitted_attrs, as before.
+        const left = maxAttrsPerEntry - sink.attrs.length
+        sink.max = sink.attrs.length + Math.max(Math.min(1, left), left - (changedKeys.length - i - 1))
         // Union, not per-side: terraform applies a config-derived mark (a
         // `sensitive = true` variable, sensitive(), a sensitive module output)
         // to the PLANNED value only — it is never persisted to state — so a
@@ -543,15 +947,11 @@ function processChanges(changes: ResourceChange[], maxEntries: number, maxAttrsP
         // side against its own mirror would emit the other side in cleartext
         // (the `~ user_data = "old-plaintext" -> (sensitive value)` shape).
         // Over-masking a symmetric pair costs nothing: both sides already
-        // render "(sensitive)".
-        const sensitive = isSens(bs, k) || isSens(as_, k)
-        attrs.push({
-          name: k,
-          before: sensitive ? '(sensitive)' : fmtCanon(bv, bCanon),
-          after: sensitive ? '(sensitive)' : fmtCanon(av, aCanon),
-        })
+        // render "(sensitive)". `walkAttr` applies it at every path it emits.
+        walkAttr(sink, k, own(bObj, k), own(aObj, k), mirrorFor(bs, k), mirrorFor(as_, k), 0)
       }
-      if (attrs.length > 0) item.attrs = attrs
+      omittedAttrs += sink.omitted
+      if (sink.attrs.length > 0) item.attrs = sink.attrs
     }
 
     summary.push(item)

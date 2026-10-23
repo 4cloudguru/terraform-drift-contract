@@ -30,7 +30,9 @@ literals that appear, identically, in both repositories:
   no `attrs` at all).
 
 - **`limits`** — the contract's bounds on the summary (`max_entries`,
-  `max_attrs_per_entry`), declared here rather than in any one implementation.
+  `max_attrs_per_entry`, and where an attribute stops being expanded into
+  per-path rows: `max_attr_path_depth`, `max_attr_path_code_points`), declared
+  here rather than in any one implementation.
   Each side asserts its own constants against these numbers, so a bound cannot be
   changed in one producer without the others. The tripping *behaviour* is tested
   in each implementation's own suite: a 501-entry plan committed as a vector

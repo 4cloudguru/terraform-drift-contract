@@ -84,13 +84,14 @@ those used to produce the identical `drifted: false`.
 `attrs`) to a TSM callback endpoint over the network, write it to a JSON report
 file on the runner, and echo part of it into the CI log. An unmasked `attrs`
 value — up to 300 code points of plaintext whenever the sensitivity mirrors are
-absent, or whenever the secret sits below an unmarked top-level key — is
-therefore transmitted, persisted and displayed, not merely held in memory. Read
-the masking semantics below with that in mind.
+absent, or whenever no mirror marks the secret's path — is therefore
+transmitted, persisted and displayed, not merely held in memory. Read the
+masking semantics below with that in mind.
 
 `fmt` and `isSens` are exported alongside `summarize`/`moduleCallsPlan` and are
 part of the public contract: `fmt(v)` is the 300-code-point formatter described
-below and `isSens(mirror, key)` is the masking predicate. They are exported so a
+below and `isSens(mirror, key)` reports whether the mirror marks any part of a
+top-level key (`summarize` then masks the marked paths). They are exported so a
 porter can check a mirror implementation against them value-by-value, and the
 publish workflow asserts all four are present on the CJS entry point. The same
 truncation and masking caveats apply to them as to `attrs`.
@@ -103,20 +104,49 @@ truncation and masking caveats apply to them as to `attrs`.
   `summary.length` for a distinct resource count);
 - `summary` = every change whose actions are **not exactly** `["no-op"]` or
   `["read"]`, as `{address, actions, attrs?}`;
-- `attrs` (in-place updates/replaces only) = the top-level keys whose value
-  differs, each `{name, before, after}` with values run through `fmt()`
-  (300 code-point truncation, U+2026 marker) and masked to the literal
-  `"(sensitive)"` when **either** `before_sensitive` **or** `after_sensitive`
-  marks them (terraform `-json` does **not** pre-mask — masking happens here,
-  before `fmt()`, so a marked secret never reaches the formatter). The union
-  landed in v1.1.0 and is now matched by the other implementations — see
+- `attrs` (in-place updates/replaces only) = one `{name, before, after}` row per
+  changed **path**. A top-level key whose value differs is one row — unless both
+  sides are objects, or arrays of the same length, in which case each differing
+  member is its own row, recursively. Rows are named like terraform paths
+  (`tags.COST_CENTER`, `blob_properties[0].delete_retention_policy[0].days`, and
+  `tags["kubernetes.io/role"]` for a key that is not an identifier), emitted
+  depth-first in code-point key order. Expansion stops 16 segments down
+  (`max_attr_path_depth`) and before any row name would pass 300 code points
+  (`max_attr_path_code_points`); past either bound, and for lists of different
+  lengths or two values of different kinds, the node is one row holding both
+  whole values. So a re-tag reports the tag that changed, not two 300-code-point
+  prefixes of the whole map. Values are run through `fmt()` (300 code-point
+  truncation, U+2026 marker). `maxAttrsPerEntry` counts rows, and every changed
+  top-level key keeps at least one: a key's expansion leaves a row for each
+  changed key after it, so a large map cannot push another attribute's change
+  out (when more than `maxAttrsPerEntry` keys changed, the first ones get one
+  row each, as before). Rows past a key's share are counted in `omitted_attrs`.
+  A row is masked to the literal `"(sensitive)"` on both sides when **either**
+  `before_sensitive` **or** `after_sensitive` marks its path (terraform `-json`
+  does **not** pre-mask — masking happens here, before `fmt()`, so a marked
+  secret never reaches the formatter). A **mark** is a truthy scalar —
+  terraform writes `true` — at the path, above it or below it. A container
+  with no mark in it is not one: terraform writes `[{"x":[{}]}]` for every
+  nested block and `[false,false]` for every list of primitives, sensitive or
+  not, and until v1.5.0 those masked the whole key. A marked leaf inside a block
+  masks that leaf only; a mark on a block, a map or a list masks all of it,
+  keys included; and a mirror whose shape does not match the value masks the
+  whole value when it holds any mark. And because marks are aligned by path
+  while a value can move between paths (a list reordered out of band, a key
+  renamed next to a config-derived mark), **a value a mirror marks anywhere in
+  the change is masked wherever else it appears in it** — at another index,
+  under another key, in another attribute, or as a map key. That covers
+  non-empty strings and numbers; null, booleans and `""` are not treated as
+  secrets, and a value that merely contains a marked one is not masked. The
+  union landed in v1.1.0 and is now
+  matched by the other implementations — see
   [cross-implementation status](#cross-implementation-status).
-  **Two preconditions, both real:** masking is applied *per top-level changed
-  key* and is driven *entirely* by `before_sensitive`/`after_sensitive`. A
-  secret nested under an unmarked top-level key is serialised whole, and a plan
-  that omits the sensitivity mirrors gets no masking at all for that resource.
-  Do not treat this as a redaction guarantee for plans of unknown or untrusted
-  provenance — see [SECURITY.md](SECURITY.md).
+  **One precondition, and it is real:** masking is driven *entirely* by
+  `before_sensitive`/`after_sensitive`. A secret whose path neither mirror
+  marks is emitted, at any depth, and a plan that omits the sensitivity mirrors
+  gets no masking at all for that resource. Do not treat this as a redaction
+  guarantee for plans of unknown or untrusted provenance — see
+  [SECURITY.md](SECURITY.md).
   **One key is compared by more than value:** `timeouts`, the SDK's
   operation-timeouts meta-attribute, is not a change when both sides are
   *null-equivalent* — null, absent, or a non-empty object/list whose every leaf
@@ -150,6 +180,11 @@ truncation and masking caveats apply to them as to `attrs`.
   array. Purely additive: never affects `drifted`, `summary`, or the three
   original counts, and `unmasked`/`truncated`/`omitted_entries`/`omitted_attrs`
   report only the `resource_changes` path — see [SECURITY.md](SECURITY.md).
+
+**Summaries stored before v1.5.0 keep their old shape.** A consumer that
+persisted a summary (the TSM drift record, a report file) holds the attribute
+values as formatted strings, cut at 300 code points and already masked, so the
+per-path rows cannot be recovered from them. They update on the next run.
 
 ### Module provenance (`moduleCallsPlan`)
 
@@ -189,6 +224,7 @@ CI templates:
 | `module_calls` provenance projected + credential-scrubbed + capped (above) | both jq templates project identically as of [backend#374](https://github.com/sethbacon/terraform-state-manager-backend/pull/374) |
 | Byte-level serialized form — code-point key order, U+2028/U+2029 escaped, `<`/`>`/`&` raw, `-0` | reconciled by the corpus ([#17](https://github.com/4cloudguru/terraform-drift-contract/issues/17), [#18](https://github.com/4cloudguru/terraform-drift-contract/issues/18)) |
 | jq skips `["read"]`, and `drifted` comes from the counts | reconciled in the backend ([#20](https://github.com/4cloudguru/terraform-drift-contract/issues/20), [#21](https://github.com/4cloudguru/terraform-drift-contract/issues/21)) |
+| `attrs` rows per changed path, and a mark is a truthy scalar rather than any non-empty container | the Go `driftingest` takes the same rules in the same batch, pinned by the corpus; the jq path has no `attrs` |
 
 Neither behaviour changes counting or skip semantics, and neither changes the
 symmetric case (both mirrors marking the key, or neither): those stay
