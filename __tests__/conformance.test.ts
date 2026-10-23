@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_MAX_ATTRS_PER_ENTRY,
   DEFAULT_MAX_ENTRIES,
+  MAX_ATTR_PATH_CODE_POINTS,
+  MAX_ATTR_PATH_DEPTH,
   moduleCallsPlan,
   summarize,
   type Plan,
@@ -48,8 +50,13 @@ const corpusBytes = readFileSync(corpusURL)
  *  the Go mirror's vendored copy have silently diverged.
  *
  *  Updated again for the 7 `timeouts` null-equivalence vectors
- *  (`attrs/timeouts-*`, `attrs/null-leaved-vs-null-on-another-key-still-shows`). */
-const CORPUS_SHA256 = '338d86c9a8d61134257810fc99d57e7abbc7832ce33d3cff031d0024208cdaec'
+ *  (`attrs/timeouts-*`, `attrs/null-leaved-vs-null-on-another-key-still-shows`).
+ *
+ *  Updated again for per-path attrs and mark-only masking: 15 `attrs/*`, 14
+ *  `masking/*` and 2 `drift/*` vectors, the two new `limits`, the changed
+ *  expectation of `attrs/timeouts-with-a-value-still-shows` and three
+ *  re-worded `masking/*` whys. */
+const CORPUS_SHA256 = '4fdc8feaa9f18a28244c4427fd1460bb8019d9f49cb7b65151c85c7c687f650a'
 
 /** Digest over the rendered results of the reconciled subset. Same literal in
  *  the Go mirror.
@@ -61,8 +68,11 @@ const CORPUS_SHA256 = '338d86c9a8d61134257810fc99d57e7abbc7832ce33d3cff031d00242
  *  difference, so all 6 join the reconciled set) contribute their own rows.
  *
  *  Updated again for the 7 `timeouts` vectors, which state no `go` difference
- *  and so all join the reconciled set. */
-const RECONCILED_DIGEST = '3b52966c0a5907dd2d317f8f9eed80605022ff1eca6a05c700068f481a3b516c'
+ *  and so all join the reconciled set.
+ *
+ *  Updated again for the 31 per-path attrs and masking vectors, none of which
+ *  states a `go` difference, and for the one changed timeouts expectation. */
+const RECONCILED_DIGEST = 'b794eea7eb3bea9970c4bfddbd12b686c15e9bf4745c297b28d3e81481d8fe28'
 
 /** Digest over the emitted module provenance of every vector that carries an
  *  `expect_module_calls`. The jq mirror in the backend's dispatched templates
@@ -84,7 +94,7 @@ interface Vector {
 }
 
 const corpus = JSON.parse(corpusBytes.toString('utf8')) as {
-  limits: { max_entries: number; max_attrs_per_entry: number }
+  limits: { max_entries: number; max_attrs_per_entry: number; max_attr_path_depth: number; max_attr_path_code_points: number }
   vectors: Vector[]
 }
 
@@ -152,6 +162,11 @@ describe('conformance corpus', () => {
     // one across producers.
     expect(corpus.limits.max_entries).toBe(DEFAULT_MAX_ENTRIES)
     expect(corpus.limits.max_attrs_per_entry).toBe(DEFAULT_MAX_ATTRS_PER_ENTRY)
+    // Where an attribute stops being expanded into per-path rows. A producer
+    // that expanded one level further would emit different rows for the same
+    // plan, and a different `omitted_attrs`.
+    expect(corpus.limits.max_attr_path_depth).toBe(MAX_ATTR_PATH_DEPTH)
+    expect(corpus.limits.max_attr_path_code_points).toBe(MAX_ATTR_PATH_CODE_POINTS)
   })
 
   it('has vectors, uniquely identified', () => {
@@ -171,10 +186,11 @@ describe('conformance corpus', () => {
   // the back-compat guarantee the whole design rests on. Pinned so a future edit
   // to what counts as "pre-existing" is deliberate, not an accidental narrowing
   // or widening of this guard's coverage: 56 when resource_drift landed, 63 since
-  // the 7 `timeouts` null-equivalence vectors.
+  // the 7 `timeouts` null-equivalence vectors, 92 since the 15 per-path attrs
+  // and 14 mark-only masking vectors.
   it('summary and the three existing counts are unchanged for every pre-existing vector', () => {
     const preExisting = corpus.vectors.filter((v) => !v.id.startsWith('drift/'))
-    expect(preExisting.length).toBe(63)
+    expect(preExisting.length).toBe(92)
     for (const vector of preExisting) {
       const result = summarize(vector.plan)
       expect(result.added).toBe(vector.expect.added ?? 0)

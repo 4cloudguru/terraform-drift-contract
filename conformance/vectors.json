@@ -2,7 +2,9 @@
   "schema": "drift-contract-conformance/v1",
   "limits": {
     "max_entries": 500,
-    "max_attrs_per_entry": 50
+    "max_attrs_per_entry": 50,
+    "max_attr_path_depth": 16,
+    "max_attr_path_code_points": 300
   },
   "note": "The shared conformance corpus for the TSM drift contract. One input plan per\nvector plus the EXPECTED output, hand-authored as intent and never read back\nfrom an implementation. Every implementation of the contract runs this file\nand compares byte-for-byte:\n  - TypeScript (canonical) - 4cloudguru/terraform-drift-contract, __tests__/conformance.test.ts\n  - Go driftingest         - terraform-state-manager-backend, internal/services/driftingest\n  - jq                     - terraform-state-manager-backend, the dispatched CI templates\nThis file is byte-identical in both repositories; each side asserts the same\nSHA-256 of it, so an edit to one copy reddens that repository immediately.\nFields: `expect` is the canonical summarize() Result; it states only the\nNON-DEFAULT markers, and each runner fills unparseable/unmasked/truncated/\nomitted_entries/omitted_attrs from the zero value. `expect_module_calls`,\nwhen present, is the canonical moduleCallsPlan() output. `go` and `jq` record\na STATED difference for that vector - either {\"rejects\": why} when that\nimplementation refuses the document outright, or {\"expect\": ..., \"why\": ...}\nwhen it answers differently. A difference with no entry here is a regression.\nThe jq expectation, when not stated, is `expect` with every attrs array\ndropped: the dispatched summary is {address, actions} only and has no\nattribute values at all.",
   "vectors": [
@@ -1073,7 +1075,7 @@
     },
     {
       "id": "attrs/timeouts-with-a-value-still-shows",
-      "why": "Only a value-free shape difference is ignored. A `timeouts` block with any non-null leaf, on either side, is a change and is reported: a configured timeout removed (a), and one added where the state held an object of nulls (b).",
+      "why": "Only a value-free shape difference is ignored. A `timeouts` block with any non-null leaf, on either side, is a change and is reported: a configured timeout removed (a), and one added where the state held an object of nulls (b). Both sides of (b) are objects, so it is reported at the member that changed.",
       "plan": {
         "resource_changes": [
           {
@@ -1155,9 +1157,9 @@
             ],
             "attrs": [
               {
-                "name": "timeouts",
-                "before": "{\"create\":null,\"delete\":null,\"read\":null,\"update\":null}",
-                "after": "{\"create\":\"60m\",\"delete\":null,\"read\":null,\"update\":null}"
+                "name": "timeouts.create",
+                "before": null,
+                "after": "60m"
               }
             ]
           }
@@ -1335,6 +1337,2750 @@
             "actions": [
               "delete",
               "create"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/map-change-is-reported-per-key",
+      "why": "The shape of TBD3216/APP2934, ADO build 378948 (Brunswick fleet, 2026-10-22), values replaced: a central re-tag changed COST_CENTER, one of 14 tags. The whole map is past the 300-code-point value cap, so up to v1.4.2 both sides were cut mid-JSON and the changed key was in neither prefix. A changed map is reported per changed key; the 13 unchanged ones are not rows. The value-free timeouts block is still ignored.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "module.app_pattern.azurerm_resource_group.application",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "name": "rg-app0000",
+                "tags": {
+                  "ACCESSIBILITY": "Not Internet Accessible",
+                  "AGN": "",
+                  "APPID": "APP0000",
+                  "AUDIT": "None",
+                  "CONFIDENTIALITY": "Internal",
+                  "COST_CENTER": "100.000.1111.0000001",
+                  "CRITICALITY": "Supporting",
+                  "DIVISION": "XYZ",
+                  "DYNAMIC_FIREWALL": "SN-XYZ-APP0000-P-CUS01",
+                  "EXPIRATION_DATE": "none",
+                  "PROJECT_COST_CENTER": "",
+                  "REQUESTOR": "Requestor Name",
+                  "SUPPORT_GROUP": "Cloud Engineering",
+                  "TIER": "Production"
+                },
+                "timeouts": {
+                  "create": null,
+                  "delete": null,
+                  "read": null,
+                  "update": null
+                }
+              },
+              "after": {
+                "name": "rg-app0000",
+                "tags": {
+                  "ACCESSIBILITY": "Not Internet Accessible",
+                  "AGN": "",
+                  "APPID": "APP0000",
+                  "AUDIT": "None",
+                  "CONFIDENTIALITY": "Internal",
+                  "COST_CENTER": "100.000.2222.0000002",
+                  "CRITICALITY": "Supporting",
+                  "DIVISION": "XYZ",
+                  "DYNAMIC_FIREWALL": "SN-XYZ-APP0000-P-CUS01",
+                  "EXPIRATION_DATE": "none",
+                  "PROJECT_COST_CENTER": "",
+                  "REQUESTOR": "Requestor Name",
+                  "SUPPORT_GROUP": "Cloud Engineering",
+                  "TIER": "Production"
+                },
+                "timeouts": null
+              },
+              "before_sensitive": {
+                "tags": {}
+              },
+              "after_sensitive": {
+                "tags": {}
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "module.app_pattern.azurerm_resource_group.application",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "tags.COST_CENTER",
+                "before": "100.000.1111.0000001",
+                "after": "100.000.2222.0000002"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/map-key-added-and-removed",
+      "why": "An added key reports before null and a removed one after null, as an added or removed top-level attribute does (a). A map emptied of every tag reports each removed key (b, the availability-set shape in build 378948): both sides are objects, so the map is expanded even though one is empty.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_resource_group.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "tags": {
+                  "a": "1",
+                  "gone": "x"
+                }
+              },
+              "after": {
+                "tags": {
+                  "a": "1",
+                  "added": "y"
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          },
+          {
+            "address": "azurerm_availability_set.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "tags": {
+                  "APPID": "APP0000",
+                  "AUDIT": "None"
+                }
+              },
+              "after": {
+                "tags": {}
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 2,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_resource_group.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "tags.added",
+                "before": null,
+                "after": "y"
+              },
+              {
+                "name": "tags.gone",
+                "before": "x",
+                "after": null
+              }
+            ]
+          },
+          {
+            "address": "azurerm_availability_set.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "tags.APPID",
+                "before": "APP0000",
+                "after": null
+              },
+              {
+                "name": "tags.AUDIT",
+                "before": "None",
+                "after": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/non-identifier-keys-are-quoted",
+      "why": "A member key that is a terraform identifier ([A-Za-z_][A-Za-z0-9_]*) is named `.key`; every other key is a quoted index `[\"key\"]`, the key as a JSON string literal in the canonical serialized form: non-ASCII and `<`/`>`/`&` raw, U+2028/U+2029 and `\"` escaped. So a name parses back to one path. Rows are in code-point order of the keys, above-BMP last.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_kubernetes_cluster.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "tags": {
+                  "": "a",
+                  "1st": "a",
+                  "<&>": "a",
+                  "a b": "a",
+                  "a.b": "a",
+                  "a[0]": "a",
+                  "a b": "a",
+                  "cost-center": "a",
+                  "kubernetes.io/role": "a",
+                  "ok_1": "a",
+                  "say \"hi\"": "a",
+                  "é": "a",
+                  "😀": "a"
+                }
+              },
+              "after": {
+                "tags": {
+                  "": "b",
+                  "1st": "b",
+                  "<&>": "b",
+                  "a b": "b",
+                  "a.b": "b",
+                  "a[0]": "b",
+                  "a b": "b",
+                  "cost-center": "b",
+                  "kubernetes.io/role": "b",
+                  "ok_1": "b",
+                  "say \"hi\"": "b",
+                  "é": "b",
+                  "😀": "b"
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_kubernetes_cluster.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "tags[\"\"]",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags[\"1st\"]",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags[\"<&>\"]",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags[\"a b\"]",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags[\"a.b\"]",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags[\"a[0]\"]",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags[\"a\\u2028b\"]",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags[\"cost-center\"]",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags[\"kubernetes.io/role\"]",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.ok_1",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags[\"say \\\"hi\\\"\"]",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags[\"é\"]",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags[\"😀\"]",
+                "before": "a",
+                "after": "b"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/equal-length-list-reports-changed-elements",
+      "why": "Lists of one length are expanded by index, and only the elements that differ are rows. Nested-block lists are descended the same way: a list of one block is `[0]`.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_security_group.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "cidrs": [
+                  "10.0.0.0/8",
+                  "10.1.0.0/16",
+                  "10.2.0.0/16"
+                ],
+                "ingress": [
+                  {
+                    "from_port": 443,
+                    "to_port": 443
+                  }
+                ]
+              },
+              "after": {
+                "cidrs": [
+                  "10.0.0.0/8",
+                  "10.9.0.0/16",
+                  "10.2.0.0/16"
+                ],
+                "ingress": [
+                  {
+                    "from_port": 443,
+                    "to_port": 8443
+                  }
+                ]
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_security_group.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "cidrs[1]",
+                "before": "10.1.0.0/16",
+                "after": "10.9.0.0/16"
+              },
+              {
+                "name": "ingress[0].to_port",
+                "before": "443",
+                "after": "8443"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/different-length-list-is-one-row",
+      "why": "Lists of different lengths are not expanded: an element added or removed would shift every index after it. The list is one row holding both whole values, when the elements they share are equal (a) and when one of those differs too (b): index rows over the shared prefix would hide the length change.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_virtual_network.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "dns_servers": [
+                  "10.0.0.4"
+                ]
+              },
+              "after": {
+                "dns_servers": [
+                  "10.0.0.4",
+                  "10.0.0.5"
+                ]
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          },
+          {
+            "address": "azurerm_virtual_network.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "dns_servers": [
+                  "10.0.0.4",
+                  "10.0.0.5"
+                ]
+              },
+              "after": {
+                "dns_servers": [
+                  "10.0.0.6"
+                ]
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 2,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_virtual_network.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "dns_servers",
+                "before": "[\"10.0.0.4\"]",
+                "after": "[\"10.0.0.4\",\"10.0.0.5\"]"
+              }
+            ]
+          },
+          {
+            "address": "azurerm_virtual_network.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "dns_servers",
+                "before": "[\"10.0.0.4\",\"10.0.0.5\"]",
+                "after": "[\"10.0.0.6\"]"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/different-kinds-are-one-row",
+      "why": "Only an object against an object, or an array against an array, is expanded. A block that appears (null against an object), an array against an object, and a scalar against an array are each one row.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "a": null,
+                "b": [
+                  {
+                    "x": 1
+                  }
+                ],
+                "c": "x"
+              },
+              "after": {
+                "a": {
+                  "x": 1
+                },
+                "b": {
+                  "x": 1
+                },
+                "c": [
+                  "x"
+                ]
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "a",
+                "before": null,
+                "after": "{\"x\":1}"
+              },
+              {
+                "name": "b",
+                "before": "[{\"x\":1}]",
+                "after": "{\"x\":1}"
+              },
+              {
+                "name": "c",
+                "before": "x",
+                "after": "[\"x\"]"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/null-member-against-absent-is-one-row",
+      "why": "A null member equals an absent one, exactly as for top-level keys. When that is the only difference, member by member nothing differs, so the node is one row with both whole values: at the top level (a) and one level down (b). A walked node always yields at least one row, so no difference that a whole-value comparison sees is lost.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "blk": {
+                  "a": 1,
+                  "x": null
+                }
+              },
+              "after": {
+                "blk": {
+                  "a": 1
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          },
+          {
+            "address": "aws_instance.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "blk": {
+                  "a": {
+                    "b": 1,
+                    "x": null
+                  },
+                  "c": 1
+                }
+              },
+              "after": {
+                "blk": {
+                  "a": {
+                    "b": 1
+                  },
+                  "c": 1
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 2,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "blk",
+                "before": "{\"a\":1,\"x\":null}",
+                "after": "{\"a\":1}"
+              }
+            ]
+          },
+          {
+            "address": "aws_instance.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "blk.a",
+                "before": "{\"b\":1,\"x\":null}",
+                "after": "{\"b\":1}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/rows-are-depth-first-in-code-point-order",
+      "why": "Rows are emitted depth-first: each changed top-level key in code-point order, and under it each changed member in code-point key order or index order. U+FFFF sorts before an above-BMP key here, as it does in Go and jq; a UTF-16 code-unit sort reverses them.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "a": {
+                  "z": 1,
+                  "b": [
+                    {
+                      "y": 1,
+                      "x": 1
+                    }
+                  ],
+                  "￿": 1,
+                  "😀": 1
+                },
+                "c": 1
+              },
+              "after": {
+                "a": {
+                  "z": 2,
+                  "b": [
+                    {
+                      "y": 2,
+                      "x": 2
+                    }
+                  ],
+                  "￿": 2,
+                  "😀": 2
+                },
+                "c": 2
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "a.b[0].x",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "a.b[0].y",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "a.z",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "a[\"￿\"]",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "a[\"😀\"]",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "c",
+                "before": "1",
+                "after": "2"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/expansion-stops-at-the-depth-bound",
+      "why": "Expansion stops max_attr_path_depth (16) segments below the top-level key: the node there is one row holding the rest of both values whole. Objects (a) and arrays (b) alike. This bound is also the cost bound: each expanded level serialises its members once more.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "deep": {
+                  "n": {
+                    "n": {
+                      "n": {
+                        "n": {
+                          "n": {
+                            "n": {
+                              "n": {
+                                "n": {
+                                  "n": {
+                                    "n": {
+                                      "n": {
+                                        "n": {
+                                          "n": {
+                                            "n": {
+                                              "n": {
+                                                "n": {
+                                                  "n": {
+                                                    "n": "old"
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "after": {
+                "deep": {
+                  "n": {
+                    "n": {
+                      "n": {
+                        "n": {
+                          "n": {
+                            "n": {
+                              "n": {
+                                "n": {
+                                  "n": {
+                                    "n": {
+                                      "n": {
+                                        "n": {
+                                          "n": {
+                                            "n": {
+                                              "n": {
+                                                "n": {
+                                                  "n": {
+                                                    "n": "new"
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          },
+          {
+            "address": "aws_instance.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "deep": [
+                  [
+                    [
+                      [
+                        [
+                          [
+                            [
+                              [
+                                [
+                                  [
+                                    [
+                                      [
+                                        [
+                                          [
+                                            [
+                                              [
+                                                [
+                                                  [
+                                                    1
+                                                  ]
+                                                ]
+                                              ]
+                                            ]
+                                          ]
+                                        ]
+                                      ]
+                                    ]
+                                  ]
+                                ]
+                              ]
+                            ]
+                          ]
+                        ]
+                      ]
+                    ]
+                  ]
+                ]
+              },
+              "after": {
+                "deep": [
+                  [
+                    [
+                      [
+                        [
+                          [
+                            [
+                              [
+                                [
+                                  [
+                                    [
+                                      [
+                                        [
+                                          [
+                                            [
+                                              [
+                                                [
+                                                  [
+                                                    2
+                                                  ]
+                                                ]
+                                              ]
+                                            ]
+                                          ]
+                                        ]
+                                      ]
+                                    ]
+                                  ]
+                                ]
+                              ]
+                            ]
+                          ]
+                        ]
+                      ]
+                    ]
+                  ]
+                ]
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 2,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "deep.n.n.n.n.n.n.n.n.n.n.n.n.n.n.n.n",
+                "before": "{\"n\":{\"n\":\"old\"}}",
+                "after": "{\"n\":{\"n\":\"new\"}}"
+              }
+            ]
+          },
+          {
+            "address": "aws_instance.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "deep[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]",
+                "before": "[[1]]",
+                "after": "[[2]]"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/expansion-stops-at-the-name-bound",
+      "why": "A row name is never truncated, so a node is not expanded when the name of any changed member would pass max_attr_path_code_points (300); it is one row, its values capped as usual (a). A member name of exactly 300 code points is expanded (b).",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "tags": {
+                  "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk": "a",
+                  "short": "a"
+                }
+              },
+              "after": {
+                "tags": {
+                  "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk": "b",
+                  "short": "b"
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          },
+          {
+            "address": "aws_instance.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "tags": {
+                  "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk": "a"
+                }
+              },
+              "after": {
+                "tags": {
+                  "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk": "b"
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 2,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "tags",
+                "before": "{\"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk…",
+                "after": "{\"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk…"
+              }
+            ]
+          },
+          {
+            "address": "aws_instance.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "tags.kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+                "before": "a",
+                "after": "b"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/name-bound-counts-code-points",
+      "why": "The name bound counts code points, not UTF-16 units or UTF-8 bytes: a name of 300 above-BMP-heavy code points (592 UTF-16 units) is expanded (a), and one of 301 is not (b).",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "tags": {
+                  "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": "a"
+                }
+              },
+              "after": {
+                "tags": {
+                  "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": "b"
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          },
+          {
+            "address": "aws_instance.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "tags": {
+                  "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": "a"
+                }
+              },
+              "after": {
+                "tags": {
+                  "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": "b"
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 2,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "tags[\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\"]",
+                "before": "a",
+                "after": "b"
+              }
+            ]
+          },
+          {
+            "address": "aws_instance.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "tags",
+                "before": "{\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\":\"a\"…",
+                "after": "{\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\":\"b\"…"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "attrs/expanded-rows-count-against-the-attr-cap",
+      "why": "max_attrs_per_entry (50) bounds ROWS, so an expanded map can reach it. 51 changed tags are 51 rows: 50 are emitted in order and the 51st is counted in omitted_attrs, marking the summary truncated.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_resource_group.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "tags": {
+                  "t00": "a",
+                  "t01": "a",
+                  "t02": "a",
+                  "t03": "a",
+                  "t04": "a",
+                  "t05": "a",
+                  "t06": "a",
+                  "t07": "a",
+                  "t08": "a",
+                  "t09": "a",
+                  "t10": "a",
+                  "t11": "a",
+                  "t12": "a",
+                  "t13": "a",
+                  "t14": "a",
+                  "t15": "a",
+                  "t16": "a",
+                  "t17": "a",
+                  "t18": "a",
+                  "t19": "a",
+                  "t20": "a",
+                  "t21": "a",
+                  "t22": "a",
+                  "t23": "a",
+                  "t24": "a",
+                  "t25": "a",
+                  "t26": "a",
+                  "t27": "a",
+                  "t28": "a",
+                  "t29": "a",
+                  "t30": "a",
+                  "t31": "a",
+                  "t32": "a",
+                  "t33": "a",
+                  "t34": "a",
+                  "t35": "a",
+                  "t36": "a",
+                  "t37": "a",
+                  "t38": "a",
+                  "t39": "a",
+                  "t40": "a",
+                  "t41": "a",
+                  "t42": "a",
+                  "t43": "a",
+                  "t44": "a",
+                  "t45": "a",
+                  "t46": "a",
+                  "t47": "a",
+                  "t48": "a",
+                  "t49": "a",
+                  "t50": "a"
+                }
+              },
+              "after": {
+                "tags": {
+                  "t00": "b",
+                  "t01": "b",
+                  "t02": "b",
+                  "t03": "b",
+                  "t04": "b",
+                  "t05": "b",
+                  "t06": "b",
+                  "t07": "b",
+                  "t08": "b",
+                  "t09": "b",
+                  "t10": "b",
+                  "t11": "b",
+                  "t12": "b",
+                  "t13": "b",
+                  "t14": "b",
+                  "t15": "b",
+                  "t16": "b",
+                  "t17": "b",
+                  "t18": "b",
+                  "t19": "b",
+                  "t20": "b",
+                  "t21": "b",
+                  "t22": "b",
+                  "t23": "b",
+                  "t24": "b",
+                  "t25": "b",
+                  "t26": "b",
+                  "t27": "b",
+                  "t28": "b",
+                  "t29": "b",
+                  "t30": "b",
+                  "t31": "b",
+                  "t32": "b",
+                  "t33": "b",
+                  "t34": "b",
+                  "t35": "b",
+                  "t36": "b",
+                  "t37": "b",
+                  "t38": "b",
+                  "t39": "b",
+                  "t40": "b",
+                  "t41": "b",
+                  "t42": "b",
+                  "t43": "b",
+                  "t44": "b",
+                  "t45": "b",
+                  "t46": "b",
+                  "t47": "b",
+                  "t48": "b",
+                  "t49": "b",
+                  "t50": "b"
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_resource_group.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "tags.t00",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t01",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t02",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t03",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t04",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t05",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t06",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t07",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t08",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t09",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t10",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t11",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t12",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t13",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t14",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t15",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t16",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t17",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t18",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t19",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t20",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t21",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t22",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t23",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t24",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t25",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t26",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t27",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t28",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t29",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t30",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t31",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t32",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t33",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t34",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t35",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t36",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t37",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t38",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t39",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t40",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t41",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t42",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t43",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t44",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t45",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t46",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t47",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t48",
+                "before": "a",
+                "after": "b"
+              },
+              {
+                "name": "tags.t49",
+                "before": "a",
+                "after": "b"
+              }
+            ]
+          }
+        ],
+        "truncated": true,
+        "omitted_attrs": 1
+      },
+      "jq": {
+        "why": "The dispatched summary carries no attrs, so it has no attribute rows to cap: its omitted_attrs is always 0, and its truncated reports max_entries only.",
+        "expect": {
+          "added": 0,
+          "changed": 1,
+          "destroyed": 0,
+          "drifted": true,
+          "summary": [
+            {
+              "address": "azurerm_resource_group.a",
+              "actions": [
+                "update"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "attrs/every-changed-key-keeps-a-row",
+      "why": "The max_attrs_per_entry rows are shared by every changed path in an entry, so a large expansion could take all of them: 50 changed keys in a map that sorts first hid a later attribute's change (here a container image), where v1.4.2 gave every changed attribute a row. Each top-level key leaves one row for every changed key after it, so the map shows 49 of its 50 changes, the 50th is counted in omitted_attrs, and the image change keeps its row.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "app_settings": {
+                  "t00": "0",
+                  "t01": "0",
+                  "t02": "0",
+                  "t03": "0",
+                  "t04": "0",
+                  "t05": "0",
+                  "t06": "0",
+                  "t07": "0",
+                  "t08": "0",
+                  "t09": "0",
+                  "t10": "0",
+                  "t11": "0",
+                  "t12": "0",
+                  "t13": "0",
+                  "t14": "0",
+                  "t15": "0",
+                  "t16": "0",
+                  "t17": "0",
+                  "t18": "0",
+                  "t19": "0",
+                  "t20": "0",
+                  "t21": "0",
+                  "t22": "0",
+                  "t23": "0",
+                  "t24": "0",
+                  "t25": "0",
+                  "t26": "0",
+                  "t27": "0",
+                  "t28": "0",
+                  "t29": "0",
+                  "t30": "0",
+                  "t31": "0",
+                  "t32": "0",
+                  "t33": "0",
+                  "t34": "0",
+                  "t35": "0",
+                  "t36": "0",
+                  "t37": "0",
+                  "t38": "0",
+                  "t39": "0",
+                  "t40": "0",
+                  "t41": "0",
+                  "t42": "0",
+                  "t43": "0",
+                  "t44": "0",
+                  "t45": "0",
+                  "t46": "0",
+                  "t47": "0",
+                  "t48": "0",
+                  "t49": "0"
+                },
+                "site_config": [
+                  {
+                    "application_stack": [
+                      {
+                        "docker_image_name": "org/app:1.0"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "after": {
+                "app_settings": {
+                  "t00": "1",
+                  "t01": "1",
+                  "t02": "1",
+                  "t03": "1",
+                  "t04": "1",
+                  "t05": "1",
+                  "t06": "1",
+                  "t07": "1",
+                  "t08": "1",
+                  "t09": "1",
+                  "t10": "1",
+                  "t11": "1",
+                  "t12": "1",
+                  "t13": "1",
+                  "t14": "1",
+                  "t15": "1",
+                  "t16": "1",
+                  "t17": "1",
+                  "t18": "1",
+                  "t19": "1",
+                  "t20": "1",
+                  "t21": "1",
+                  "t22": "1",
+                  "t23": "1",
+                  "t24": "1",
+                  "t25": "1",
+                  "t26": "1",
+                  "t27": "1",
+                  "t28": "1",
+                  "t29": "1",
+                  "t30": "1",
+                  "t31": "1",
+                  "t32": "1",
+                  "t33": "1",
+                  "t34": "1",
+                  "t35": "1",
+                  "t36": "1",
+                  "t37": "1",
+                  "t38": "1",
+                  "t39": "1",
+                  "t40": "1",
+                  "t41": "1",
+                  "t42": "1",
+                  "t43": "1",
+                  "t44": "1",
+                  "t45": "1",
+                  "t46": "1",
+                  "t47": "1",
+                  "t48": "1",
+                  "t49": "1"
+                },
+                "site_config": [
+                  {
+                    "application_stack": [
+                      {
+                        "docker_image_name": "evil/backdoor:latest"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "app_settings.t00",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t01",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t02",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t03",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t04",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t05",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t06",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t07",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t08",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t09",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t10",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t11",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t12",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t13",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t14",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t15",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t16",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t17",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t18",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t19",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t20",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t21",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t22",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t23",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t24",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t25",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t26",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t27",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t28",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t29",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t30",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t31",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t32",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t33",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t34",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t35",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t36",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t37",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t38",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t39",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t40",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t41",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t42",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t43",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t44",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t45",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t46",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t47",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "app_settings.t48",
+                "before": "0",
+                "after": "1"
+              },
+              {
+                "name": "site_config[0].application_stack[0].docker_image_name",
+                "before": "org/app:1.0",
+                "after": "evil/backdoor:latest"
+              }
+            ]
+          }
+        ],
+        "truncated": true,
+        "omitted_attrs": 1
+      },
+      "jq": {
+        "why": "The dispatched summary carries no attrs, so it has no attribute rows to cap: its omitted_attrs is always 0, and its truncated reports max_entries only.",
+        "expect": {
+          "added": 0,
+          "changed": 1,
+          "destroyed": 0,
+          "drifted": true,
+          "summary": [
+            {
+              "address": "azurerm_linux_web_app.a",
+              "actions": [
+                "update"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "attrs/more-changed-keys-than-rows",
+      "why": "When more top-level keys changed than max_attrs_per_entry allows, the first 50 changed keys each get one row (an expanded key its first changed member) and the rest are counted in omitted_attrs, as in v1.4.2.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "t00": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t01": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t02": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t03": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t04": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t05": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t06": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t07": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t08": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t09": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t10": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t11": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t12": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t13": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t14": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t15": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t16": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t17": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t18": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t19": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t20": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t21": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t22": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t23": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t24": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t25": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t26": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t27": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t28": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t29": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t30": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t31": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t32": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t33": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t34": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t35": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t36": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t37": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t38": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t39": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t40": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t41": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t42": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t43": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t44": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t45": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t46": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t47": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t48": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t49": {
+                  "a": "1",
+                  "b": "1"
+                },
+                "t50": {
+                  "a": "1",
+                  "b": "1"
+                }
+              },
+              "after": {
+                "t00": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t01": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t02": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t03": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t04": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t05": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t06": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t07": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t08": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t09": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t10": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t11": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t12": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t13": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t14": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t15": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t16": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t17": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t18": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t19": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t20": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t21": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t22": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t23": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t24": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t25": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t26": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t27": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t28": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t29": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t30": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t31": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t32": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t33": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t34": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t35": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t36": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t37": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t38": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t39": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t40": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t41": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t42": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t43": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t44": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t45": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t46": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t47": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t48": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t49": {
+                  "a": "2",
+                  "b": "2"
+                },
+                "t50": {
+                  "a": "2",
+                  "b": "2"
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "t00.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t01.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t02.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t03.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t04.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t05.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t06.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t07.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t08.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t09.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t10.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t11.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t12.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t13.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t14.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t15.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t16.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t17.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t18.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t19.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t20.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t21.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t22.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t23.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t24.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t25.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t26.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t27.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t28.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t29.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t30.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t31.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t32.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t33.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t34.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t35.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t36.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t37.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t38.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t39.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t40.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t41.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t42.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t43.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t44.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t45.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t46.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t47.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t48.a",
+                "before": "1",
+                "after": "2"
+              },
+              {
+                "name": "t49.a",
+                "before": "1",
+                "after": "2"
+              }
+            ]
+          }
+        ],
+        "truncated": true,
+        "omitted_attrs": 52
+      },
+      "jq": {
+        "why": "The dispatched summary carries no attrs, so it has no attribute rows to cap: its omitted_attrs is always 0, and its truncated reports max_entries only.",
+        "expect": {
+          "added": 0,
+          "changed": 1,
+          "destroyed": 0,
+          "drifted": true,
+          "summary": [
+            {
+              "address": "aws_instance.a",
+              "actions": [
+                "update"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "attrs/member-values-format-like-top-level-values",
+      "why": "A member row formats its values with the same fmt() as a top-level row: a string raw, `<`/`>`/`&` raw, a number or bool as canonical JSON, null as null, a string past 300 code points cut with U+2026, and a member whose two sides are different kinds as whole canonical JSON.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "cfg": {
+                  "b": true,
+                  "e": {},
+                  "n": 1,
+                  "nul": null,
+                  "s": "a<b",
+                  "t": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+                }
+              },
+              "after": {
+                "cfg": {
+                  "b": false,
+                  "e": [],
+                  "n": 1.5,
+                  "nul": "set",
+                  "s": "a&b",
+                  "t": "xLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "cfg.b",
+                "before": "true",
+                "after": "false"
+              },
+              {
+                "name": "cfg.e",
+                "before": "{}",
+                "after": "[]"
+              },
+              {
+                "name": "cfg.n",
+                "before": "1",
+                "after": "1.5"
+              },
+              {
+                "name": "cfg.nul",
+                "before": null,
+                "after": "set"
+              },
+              {
+                "name": "cfg.s",
+                "before": "a<b",
+                "after": "a&b"
+              },
+              {
+                "name": "cfg.t",
+                "before": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL…",
+                "after": "xLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL…"
+              }
             ]
           }
         ]
@@ -1529,7 +4275,7 @@
     },
     {
       "id": "masking/nested-mark",
-      "why": "A non-empty nested object under the key marks it sensitive.",
+      "why": "A mark nested in an object mirror masks the key. The value is a string, so there is nothing to expand and the row is masked whole.",
       "plan": {
         "resource_changes": [
           {
@@ -1578,7 +4324,7 @@
     },
     {
       "id": "masking/empty-nested-mark-is-not-sensitive",
-      "why": "An EMPTY nested object does not mark it — Python-style truthiness, mirrored by pyTruthy in Go.",
+      "why": "An EMPTY mirror container holds no truthy scalar, so it is not a mark.",
       "plan": {
         "resource_changes": [
           {
@@ -1627,7 +4373,7 @@
     },
     {
       "id": "masking/non-empty-array-mark",
-      "why": "A non-empty array mirror (the shape a list attribute produces) marks the key.",
+      "why": "An array mirror holding a mark masks the key. The value is a string, so the row is masked whole. A non-empty array with no mark in it is not one: see masking/list-of-false-is-not-a-mark.",
       "plan": {
         "resource_changes": [
           {
@@ -1803,6 +4549,1765 @@
             "attrs": [
               {
                 "name": "pw",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/nested-block-without-a-mark-is-not-sensitive",
+      "why": "The shape of TBD4545/APP6233, ADO builds 378968 and 379017, with the mirrors of a real azurerm 4.81.0 plan: terraform writes `blob_properties` as `[{\"container_delete_retention_policy\":[{}],\"cors_rule\":[],\"delete_retention_policy\":[{}],\"restore_policy\":[]}]`, a container for every nested block with no `true` in it. Up to v1.4.2 any non-empty container masked the key, so the retention change rendered (sensitive) -> (sensitive). A mark is a truthy scalar at some depth; this mirror has none, so the change is shown at its leaves. The account keys and connection strings, which azurerm marks `true`, are changed rotations here and stay masked.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "module.app_pattern.azurerm_storage_account.application[0]",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "blob_properties": [
+                  {
+                    "change_feed_enabled": false,
+                    "change_feed_retention_in_days": 0,
+                    "container_delete_retention_policy": [
+                      {
+                        "days": 7
+                      }
+                    ],
+                    "cors_rule": [],
+                    "default_service_version": "",
+                    "delete_retention_policy": [
+                      {
+                        "days": 7,
+                        "permanent_delete_enabled": false
+                      }
+                    ],
+                    "last_access_time_enabled": false,
+                    "restore_policy": [],
+                    "versioning_enabled": false
+                  }
+                ],
+                "cross_tenant_replication_enabled": true,
+                "name": "stapp0000",
+                "primary_access_key": "FAKE-PRIMARY-KEY-1",
+                "primary_blob_connection_string": "DefaultEndpointsProtocol=https;AccountKey=FAKE-PRIMARY-KEY-1",
+                "primary_connection_string": "DefaultEndpointsProtocol=https;AccountKey=FAKE-PRIMARY-KEY-1",
+                "secondary_access_key": "FAKE-SECONDARY-KEY-1",
+                "secondary_blob_connection_string": "DefaultEndpointsProtocol=https;AccountKey=FAKE-SECONDARY-KEY-1",
+                "secondary_connection_string": "DefaultEndpointsProtocol=https;AccountKey=FAKE-SECONDARY-KEY-1",
+                "tags": {
+                  "APPID": "APP0000"
+                }
+              },
+              "after": {
+                "blob_properties": [
+                  {
+                    "change_feed_enabled": false,
+                    "change_feed_retention_in_days": 0,
+                    "container_delete_retention_policy": [
+                      {
+                        "days": 30
+                      }
+                    ],
+                    "cors_rule": [],
+                    "default_service_version": "",
+                    "delete_retention_policy": [
+                      {
+                        "days": 30,
+                        "permanent_delete_enabled": false
+                      }
+                    ],
+                    "last_access_time_enabled": false,
+                    "restore_policy": [],
+                    "versioning_enabled": false
+                  }
+                ],
+                "cross_tenant_replication_enabled": false,
+                "name": "stapp0000",
+                "primary_access_key": "FAKE-PRIMARY-KEY-2",
+                "primary_blob_connection_string": "DefaultEndpointsProtocol=https;AccountKey=FAKE-PRIMARY-KEY-2",
+                "primary_connection_string": "DefaultEndpointsProtocol=https;AccountKey=FAKE-PRIMARY-KEY-2",
+                "secondary_access_key": "FAKE-SECONDARY-KEY-2",
+                "secondary_blob_connection_string": "DefaultEndpointsProtocol=https;AccountKey=FAKE-SECONDARY-KEY-2",
+                "secondary_connection_string": "DefaultEndpointsProtocol=https;AccountKey=FAKE-SECONDARY-KEY-2",
+                "tags": {
+                  "APPID": "APP0000"
+                }
+              },
+              "before_sensitive": {
+                "blob_properties": [
+                  {
+                    "container_delete_retention_policy": [
+                      {}
+                    ],
+                    "cors_rule": [],
+                    "delete_retention_policy": [
+                      {}
+                    ],
+                    "restore_policy": []
+                  }
+                ],
+                "network_rules": [],
+                "primary_access_key": true,
+                "primary_blob_connection_string": true,
+                "primary_connection_string": true,
+                "secondary_access_key": true,
+                "secondary_blob_connection_string": true,
+                "secondary_connection_string": true,
+                "tags": {}
+              },
+              "after_sensitive": {
+                "blob_properties": [
+                  {
+                    "container_delete_retention_policy": [
+                      {}
+                    ],
+                    "cors_rule": [],
+                    "delete_retention_policy": [
+                      {}
+                    ],
+                    "restore_policy": []
+                  }
+                ],
+                "network_rules": [],
+                "primary_access_key": true,
+                "primary_blob_connection_string": true,
+                "primary_connection_string": true,
+                "secondary_access_key": true,
+                "secondary_blob_connection_string": true,
+                "secondary_connection_string": true,
+                "tags": {}
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "module.app_pattern.azurerm_storage_account.application[0]",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "blob_properties[0].container_delete_retention_policy[0].days",
+                "before": "7",
+                "after": "30"
+              },
+              {
+                "name": "blob_properties[0].delete_retention_policy[0].days",
+                "before": "7",
+                "after": "30"
+              },
+              {
+                "name": "cross_tenant_replication_enabled",
+                "before": "true",
+                "after": "false"
+              },
+              {
+                "name": "primary_access_key",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "primary_blob_connection_string",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "primary_connection_string",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "secondary_access_key",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "secondary_blob_connection_string",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "secondary_connection_string",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/list-of-false-is-not-a-mark",
+      "why": "terraform writes a list of primitives as a list of `false`s: a real azurerm 4.81.0 `address_space` of two CIDRs is `[false,false]`. Up to v1.4.2 that masked the key. It holds no truthy scalar, so it is not a mark, whether the list is expanded (a) or one row (b).",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_virtual_network.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "address_space": [
+                  "10.0.0.0/16",
+                  "10.1.0.0/16"
+                ],
+                "dns_servers": [
+                  "10.0.0.4"
+                ]
+              },
+              "after": {
+                "address_space": [
+                  "10.0.0.0/16",
+                  "10.2.0.0/16"
+                ],
+                "dns_servers": [
+                  "10.0.0.4",
+                  "10.0.0.5"
+                ]
+              },
+              "before_sensitive": {
+                "address_space": [
+                  false,
+                  false
+                ],
+                "dns_servers": [
+                  false
+                ]
+              },
+              "after_sensitive": {
+                "address_space": [
+                  false,
+                  false
+                ],
+                "dns_servers": [
+                  false,
+                  false
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_virtual_network.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "address_space[1]",
+                "before": "10.1.0.0/16",
+                "after": "10.2.0.0/16"
+              },
+              {
+                "name": "dns_servers",
+                "before": "[\"10.0.0.4\"]",
+                "after": "[\"10.0.0.4\",\"10.0.0.5\"]"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/sensitive-leaf-in-nested-block",
+      "why": "A real azurerm 4.81.0 linux_web_app mirror: `docker_registry_password` is the one sensitive leaf, three blocks deep, so only that path is masked and its changed siblings are shown (a). The union holds at every depth: marked on the after side only (b, a config-derived mark), it is masked on both sides.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "site_config": [
+                  {
+                    "always_on": true,
+                    "application_stack": [
+                      {
+                        "docker_image_name": "app:1",
+                        "docker_registry_password": "FAKE-REGISTRY-PW-1",
+                        "docker_registry_url": "https://example.azurecr.io"
+                      }
+                    ],
+                    "cors": [],
+                    "ip_restriction": []
+                  }
+                ]
+              },
+              "after": {
+                "site_config": [
+                  {
+                    "always_on": false,
+                    "application_stack": [
+                      {
+                        "docker_image_name": "app:2",
+                        "docker_registry_password": "FAKE-REGISTRY-PW-2",
+                        "docker_registry_url": "https://example.azurecr.io"
+                      }
+                    ],
+                    "cors": [],
+                    "ip_restriction": []
+                  }
+                ]
+              },
+              "before_sensitive": {
+                "site_config": [
+                  {
+                    "application_stack": [
+                      {
+                        "docker_registry_password": true
+                      }
+                    ],
+                    "cors": [],
+                    "ip_restriction": []
+                  }
+                ]
+              },
+              "after_sensitive": {
+                "site_config": [
+                  {
+                    "application_stack": [
+                      {
+                        "docker_registry_password": true
+                      }
+                    ],
+                    "cors": [],
+                    "ip_restriction": []
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "address": "azurerm_linux_web_app.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "site_config": [
+                  {
+                    "always_on": true,
+                    "application_stack": [
+                      {
+                        "docker_image_name": "app:1",
+                        "docker_registry_password": "FAKE-REGISTRY-PW-1",
+                        "docker_registry_url": "https://example.azurecr.io"
+                      }
+                    ],
+                    "cors": [],
+                    "ip_restriction": []
+                  }
+                ]
+              },
+              "after": {
+                "site_config": [
+                  {
+                    "always_on": true,
+                    "application_stack": [
+                      {
+                        "docker_image_name": "app:1",
+                        "docker_registry_password": "FAKE-REGISTRY-PW-2",
+                        "docker_registry_url": "https://example.azurecr.io"
+                      }
+                    ],
+                    "cors": [],
+                    "ip_restriction": []
+                  }
+                ]
+              },
+              "before_sensitive": {
+                "site_config": [
+                  {
+                    "application_stack": [
+                      {}
+                    ],
+                    "cors": [],
+                    "ip_restriction": []
+                  }
+                ]
+              },
+              "after_sensitive": {
+                "site_config": [
+                  {
+                    "application_stack": [
+                      {
+                        "docker_registry_password": true
+                      }
+                    ],
+                    "cors": [],
+                    "ip_restriction": []
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 2,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "site_config[0].always_on",
+                "before": "true",
+                "after": "false"
+              },
+              {
+                "name": "site_config[0].application_stack[0].docker_image_name",
+                "before": "app:1",
+                "after": "app:2"
+              },
+              {
+                "name": "site_config[0].application_stack[0].docker_registry_password",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          },
+          {
+            "address": "azurerm_linux_web_app.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "site_config[0].application_stack[0].docker_registry_password",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/whole-block-mark-masks-the-block",
+      "why": "azurerm marks `connection_string` as a whole block: the real 4.81.0 mirror is `true`, not a member-by-member map. A truthy scalar covers everything under it, so nothing is expanded into view, including the unmarked-looking `name`.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "connection_string": [
+                  {
+                    "name": "db",
+                    "type": "SQLAzure",
+                    "value": "Password=FAKE-PW-1"
+                  }
+                ]
+              },
+              "after": {
+                "connection_string": [
+                  {
+                    "name": "db2",
+                    "type": "SQLAzure",
+                    "value": "Password=FAKE-PW-2"
+                  }
+                ]
+              },
+              "before_sensitive": {
+                "connection_string": true
+              },
+              "after_sensitive": {
+                "connection_string": true
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "connection_string",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/marked-map-element",
+      "why": "A sensitive variable placed in a map: terraform marks the element (`{\"SECRET\":true}`, real 4.81.0 shape), not the map. The marked element is masked and its unmarked sibling is shown. The key is shown, as terraform shows it.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "tags": {
+                  "PLAIN": "x",
+                  "SECRET": "FAKE-TAG-SECRET-1"
+                }
+              },
+              "after": {
+                "tags": {
+                  "PLAIN": "y",
+                  "SECRET": "FAKE-TAG-SECRET-2"
+                }
+              },
+              "before_sensitive": {
+                "tags": {}
+              },
+              "after_sensitive": {
+                "tags": {
+                  "SECRET": true
+                }
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "tags.PLAIN",
+                "before": "x",
+                "after": "y"
+              },
+              {
+                "name": "tags.SECRET",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/whole-map-mark-hides-the-keys",
+      "why": "A map marked as a whole is one masked row: expanding it would put its KEYS in row names, and a key can carry the secret.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "app_settings": {
+                  "FAKE-SECRET-IN-A-KEY": "1"
+                }
+              },
+              "after": {
+                "app_settings": {
+                  "FAKE-SECRET-IN-A-KEY": "2"
+                }
+              },
+              "before_sensitive": {},
+              "after_sensitive": {
+                "app_settings": true
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "app_settings",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/mark-inside-an-unexpanded-value",
+      "why": "A node that is not expanded is one row, masked when either mirror holds a mark anywhere under it: lists of different lengths (a), and a block that appears where there was none (b).",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "rules": [
+                  {
+                    "name": "a",
+                    "secret": "FAKE-SECRET-1"
+                  }
+                ]
+              },
+              "after": {
+                "rules": [
+                  {
+                    "name": "a",
+                    "secret": "FAKE-SECRET-1"
+                  },
+                  {
+                    "name": "b",
+                    "secret": "FAKE-SECRET-2"
+                  }
+                ]
+              },
+              "before_sensitive": {
+                "rules": [
+                  {
+                    "secret": true
+                  }
+                ]
+              },
+              "after_sensitive": {
+                "rules": [
+                  {
+                    "secret": true
+                  },
+                  {
+                    "secret": true
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "address": "azurerm_linux_web_app.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "auth": null
+              },
+              "after": {
+                "auth": [
+                  {
+                    "client_id": "c",
+                    "client_secret": "FAKE-SECRET-3"
+                  }
+                ]
+              },
+              "before_sensitive": {
+                "auth": false
+              },
+              "after_sensitive": {
+                "auth": [
+                  {
+                    "client_secret": true
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 2,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "rules",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          },
+          {
+            "address": "azurerm_linux_web_app.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "auth",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/mark-under-a-mirror-of-another-shape-fails-closed",
+      "why": "Not terraform output: a mirror whose shape is not the value's (an array mirror on an object value, an object mirror on an array value) cannot be aligned member by member. When it holds a mark it masks the whole value rather than being skipped by the walk (a, b). When it holds none it is no mark (c).",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "creds": {
+                  "pass": "FAKE-SECRET-1",
+                  "user": "u"
+                }
+              },
+              "after": {
+                "creds": {
+                  "pass": "FAKE-SECRET-2",
+                  "user": "v"
+                }
+              },
+              "before_sensitive": {
+                "creds": [
+                  {
+                    "pass": true
+                  }
+                ]
+              },
+              "after_sensitive": {
+                "creds": {}
+              }
+            }
+          },
+          {
+            "address": "aws_instance.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "keys": [
+                  "public",
+                  "FAKE-SECRET-1"
+                ]
+              },
+              "after": {
+                "keys": [
+                  "public",
+                  "FAKE-SECRET-2"
+                ]
+              },
+              "before_sensitive": {},
+              "after_sensitive": {
+                "keys": {
+                  "1": true
+                }
+              }
+            }
+          },
+          {
+            "address": "aws_instance.c",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "creds": {
+                  "user": "u"
+                }
+              },
+              "after": {
+                "creds": {
+                  "user": "v"
+                }
+              },
+              "before_sensitive": {
+                "creds": [
+                  false
+                ]
+              },
+              "after_sensitive": {
+                "creds": []
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 3,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "creds",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          },
+          {
+            "address": "aws_instance.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "keys",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          },
+          {
+            "address": "aws_instance.c",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "creds.user",
+                "before": "u",
+                "after": "v"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/truthy-non-boolean-mark",
+      "why": "Not terraform output, which writes only `true`: a mark is any truthy scalar, by the Python truthiness the whole-value flag already uses, so a non-empty string or a non-zero number masks, at the path (a, b) or inside a mirror container (e, f). Up to v1.4.2 only `true` and a non-empty container did. A falsy scalar (`0`, `\"\"`) is no mark (c, d).",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "a": "FAKE-SECRET-1",
+                "b": "FAKE-SECRET-1",
+                "c": "x",
+                "d": "x",
+                "e": "FAKE-SECRET-1",
+                "f": [
+                  "FAKE-SECRET-1"
+                ]
+              },
+              "after": {
+                "a": "FAKE-SECRET-2",
+                "b": "FAKE-SECRET-2",
+                "c": "y",
+                "d": "y",
+                "e": "FAKE-SECRET-2",
+                "f": [
+                  "FAKE-SECRET-1",
+                  "FAKE-SECRET-2"
+                ]
+              },
+              "before_sensitive": {
+                "a": "yes",
+                "b": 1,
+                "c": 0,
+                "d": "",
+                "e": [
+                  "yes"
+                ],
+                "f": [
+                  0,
+                  2
+                ]
+              },
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "a",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "b",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "c",
+                "before": "x",
+                "after": "y"
+              },
+              {
+                "name": "d",
+                "before": "x",
+                "after": "y"
+              },
+              {
+                "name": "e",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "f",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/marked-value-at-another-path",
+      "why": "Marks are aligned by path, and a value can change path between the two sides. A value a mirror marks anywhere in the change is masked wherever else it appears: moved to another index in a list of one length (a), under a renamed map key next to a config-derived mark on the after side only (b), and in another attribute, as a member row or inside a whole-value row (c). The union applies here too: a value is marked when EITHER mirror marks its path, so the old plaintext of an attribute that only the after side marks is masked when it turns up elsewhere (d). Path masking alone emitted the unmarked occurrence of each, where v1.4.2 masked the whole attribute.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "args": [
+                  "FAKE-SECRET-1",
+                  "x"
+                ]
+              },
+              "after": {
+                "args": [
+                  "x",
+                  "FAKE-SECRET-1"
+                ]
+              },
+              "before_sensitive": {
+                "args": [
+                  true,
+                  false
+                ]
+              },
+              "after_sensitive": {
+                "args": [
+                  true,
+                  false
+                ]
+              }
+            }
+          },
+          {
+            "address": "azurerm_linux_web_app.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "app_settings": {
+                  "DB_PASS": "FAKE-SECRET-2",
+                  "X": "1"
+                }
+              },
+              "after": {
+                "app_settings": {
+                  "DB_PASSWORD": "FAKE-SECRET-2",
+                  "X": "1"
+                }
+              },
+              "before_sensitive": {
+                "app_settings": {}
+              },
+              "after_sensitive": {
+                "app_settings": {
+                  "DB_PASSWORD": true
+                }
+              }
+            }
+          },
+          {
+            "address": "aws_instance.c",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "key": "FAKE-SECRET-3",
+                "note": {
+                  "text": "a"
+                },
+                "other": [
+                  "x"
+                ]
+              },
+              "after": {
+                "key": "FAKE-SECRET-3",
+                "note": {
+                  "text": "FAKE-SECRET-3"
+                },
+                "other": [
+                  "x",
+                  "FAKE-SECRET-3"
+                ]
+              },
+              "before_sensitive": {
+                "key": true
+              },
+              "after_sensitive": {
+                "key": true
+              }
+            }
+          },
+          {
+            "address": "aws_instance.d",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "pw": "FAKE-SECRET-4",
+                "note": "a"
+              },
+              "after": {
+                "pw": "new",
+                "note": "FAKE-SECRET-4"
+              },
+              "before_sensitive": {},
+              "after_sensitive": {
+                "pw": true
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 4,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "args[0]",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "args[1]",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          },
+          {
+            "address": "azurerm_linux_web_app.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "app_settings.DB_PASS",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "app_settings.DB_PASSWORD",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          },
+          {
+            "address": "aws_instance.c",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "note.text",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "other",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          },
+          {
+            "address": "aws_instance.d",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "note",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "pw",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/marked-value-as-a-map-key",
+      "why": "A row name carries map keys out in the clear, so a node is not expanded when a changed member's key is a marked value; it is one row, masked because it holds that value (a). Keys under a marked map are themselves marked values, so one turning up as a value elsewhere is masked (b).",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "key": "FAKE-SECRET-1",
+                "tags": {
+                  "a": "1"
+                }
+              },
+              "after": {
+                "key": "FAKE-SECRET-1",
+                "tags": {
+                  "a": "1",
+                  "FAKE-SECRET-1": "1"
+                }
+              },
+              "before_sensitive": {
+                "key": true
+              },
+              "after_sensitive": {
+                "key": true
+              }
+            }
+          },
+          {
+            "address": "azurerm_linux_web_app.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "app_settings": {
+                  "FAKE-SECRET-IN-A-KEY": "1"
+                },
+                "note": "a"
+              },
+              "after": {
+                "app_settings": {
+                  "FAKE-SECRET-IN-A-KEY": "2"
+                },
+                "note": "FAKE-SECRET-IN-A-KEY"
+              },
+              "before_sensitive": {
+                "app_settings": true
+              },
+              "after_sensitive": {
+                "app_settings": true
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 2,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "tags",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          },
+          {
+            "address": "azurerm_linux_web_app.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "app_settings",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "note",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/marked-values-are-strings-and-numbers",
+      "why": "A marked empty string, boolean or null carries no secret and is everywhere, so it does not mask other rows that hold the same value (a). A marked number masks the same number elsewhere, and not the string of it (b). A value that merely contains a marked value is not masked (c): only exact values are.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "e": "",
+                "f": true,
+                "n": null,
+                "x": "",
+                "y": true,
+                "z": "set"
+              },
+              "after": {
+                "e": "",
+                "f": true,
+                "n": null,
+                "x": "set",
+                "y": false,
+                "z": null
+              },
+              "before_sensitive": {
+                "e": true,
+                "f": true,
+                "n": true
+              },
+              "after_sensitive": {
+                "e": true,
+                "f": true,
+                "n": true
+              }
+            }
+          },
+          {
+            "address": "aws_instance.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "pin": 1234,
+                "a": "x",
+                "b": "x"
+              },
+              "after": {
+                "pin": 1234,
+                "a": 1234,
+                "b": "1234"
+              },
+              "before_sensitive": {
+                "pin": true
+              },
+              "after_sensitive": {
+                "pin": true
+              }
+            }
+          },
+          {
+            "address": "aws_instance.c",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "key": "FAKE-SECRET-3",
+                "note": "a"
+              },
+              "after": {
+                "key": "FAKE-SECRET-3",
+                "note": "key is FAKE-SECRET-3"
+              },
+              "before_sensitive": {
+                "key": true
+              },
+              "after_sensitive": {
+                "key": true
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 3,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "x",
+                "before": "",
+                "after": "set"
+              },
+              {
+                "name": "y",
+                "before": "true",
+                "after": "false"
+              },
+              {
+                "name": "z",
+                "before": "set",
+                "after": null
+              }
+            ]
+          },
+          {
+            "address": "aws_instance.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "a",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "b",
+                "before": "x",
+                "after": "1234"
+              }
+            ]
+          },
+          {
+            "address": "aws_instance.c",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "note",
+                "before": "a",
+                "after": "key is FAKE-SECRET-3"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/marked-boolean-is-masked-at-its-path",
+      "why": "Booleans, null and \"\" are not held as marked values (masking/marked-values-are-strings-and-numbers), so for them the path rule is the only mask, and it holds at every depth: a marked flag inside a nested block (a), one marked on the after side only (b, the union), and one inside a value that is not expanded, marked on the after side only (c).",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "blk": [
+                  {
+                    "flag": true,
+                    "name": "x"
+                  }
+                ]
+              },
+              "after": {
+                "blk": [
+                  {
+                    "flag": false,
+                    "name": "y"
+                  }
+                ]
+              },
+              "before_sensitive": {
+                "blk": [
+                  {
+                    "flag": true
+                  }
+                ]
+              },
+              "after_sensitive": {
+                "blk": [
+                  {
+                    "flag": true
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "address": "aws_instance.b",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "blk": [
+                  {
+                    "flag": true
+                  }
+                ]
+              },
+              "after": {
+                "blk": [
+                  {
+                    "flag": false
+                  }
+                ]
+              },
+              "before_sensitive": {
+                "blk": [
+                  {}
+                ]
+              },
+              "after_sensitive": {
+                "blk": [
+                  {
+                    "flag": true
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "address": "aws_instance.c",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "rules": [
+                  {
+                    "flag": true
+                  }
+                ]
+              },
+              "after": {
+                "rules": [
+                  {
+                    "flag": true
+                  },
+                  {
+                    "flag": false
+                  }
+                ]
+              },
+              "before_sensitive": {
+                "rules": [
+                  {}
+                ]
+              },
+              "after_sensitive": {
+                "rules": [
+                  {},
+                  {
+                    "flag": true
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 3,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "blk[0].flag",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "blk[0].name",
+                "before": "x",
+                "after": "y"
+              }
+            ]
+          },
+          {
+            "address": "aws_instance.b",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "blk[0].flag",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          },
+          {
+            "address": "aws_instance.c",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "rules",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "masking/mark-below-the-depth-bound",
+      "why": "A mark below the depth bound is not lost: the node at the bound is one row, and it is masked because a mark sits under it.",
+      "plan": {
+        "resource_changes": [
+          {
+            "address": "aws_instance.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "deep": {
+                  "n": {
+                    "n": {
+                      "n": {
+                        "n": {
+                          "n": {
+                            "n": {
+                              "n": {
+                                "n": {
+                                  "n": {
+                                    "n": {
+                                      "n": {
+                                        "n": {
+                                          "n": {
+                                            "n": {
+                                              "n": {
+                                                "n": {
+                                                  "n": {
+                                                    "n": {
+                                                      "s": "FAKE-SECRET-1"
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "after": {
+                "deep": {
+                  "n": {
+                    "n": {
+                      "n": {
+                        "n": {
+                          "n": {
+                            "n": {
+                              "n": {
+                                "n": {
+                                  "n": {
+                                    "n": {
+                                      "n": {
+                                        "n": {
+                                          "n": {
+                                            "n": {
+                                              "n": {
+                                                "n": {
+                                                  "n": {
+                                                    "n": {
+                                                      "s": "FAKE-SECRET-2"
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "before_sensitive": {
+                "deep": {
+                  "n": {
+                    "n": {
+                      "n": {
+                        "n": {
+                          "n": {
+                            "n": {
+                              "n": {
+                                "n": {
+                                  "n": {
+                                    "n": {
+                                      "n": {
+                                        "n": {
+                                          "n": {
+                                            "n": {
+                                              "n": {
+                                                "n": {
+                                                  "n": {
+                                                    "n": {
+                                                      "s": true
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "after_sensitive": {}
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 1,
+        "destroyed": 0,
+        "drifted": true,
+        "summary": [
+          {
+            "address": "aws_instance.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "deep.n.n.n.n.n.n.n.n.n.n.n.n.n.n.n.n",
                 "before": "(sensitive)",
                 "after": "(sensitive)"
               }
@@ -3751,6 +8256,186 @@
             "attrs": [
               {
                 "name": "pw",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "drift/expansion-and-masking",
+      "why": "`resource_drift` runs through the identical walk: a hand-edited tag is reported per key and a marked leaf is masked, in drift_summary.",
+      "plan": {
+        "resource_changes": [],
+        "resource_drift": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "site_config": [
+                  {
+                    "always_on": true,
+                    "application_stack": [
+                      {
+                        "docker_image_name": "app:1",
+                        "docker_registry_password": "FAKE-REGISTRY-PW-1",
+                        "docker_registry_url": "https://example.azurecr.io"
+                      }
+                    ],
+                    "cors": [],
+                    "ip_restriction": []
+                  }
+                ],
+                "tags": {
+                  "owner": "a"
+                }
+              },
+              "after": {
+                "site_config": [
+                  {
+                    "always_on": true,
+                    "application_stack": [
+                      {
+                        "docker_image_name": "app:1",
+                        "docker_registry_password": "FAKE-REGISTRY-PW-2",
+                        "docker_registry_url": "https://example.azurecr.io"
+                      }
+                    ],
+                    "cors": [],
+                    "ip_restriction": []
+                  }
+                ],
+                "tags": {
+                  "owner": "b"
+                }
+              },
+              "before_sensitive": {
+                "site_config": [
+                  {
+                    "application_stack": [
+                      {
+                        "docker_registry_password": true
+                      }
+                    ],
+                    "cors": [],
+                    "ip_restriction": []
+                  }
+                ],
+                "tags": {}
+              },
+              "after_sensitive": {
+                "site_config": [
+                  {
+                    "application_stack": [
+                      {
+                        "docker_registry_password": true
+                      }
+                    ],
+                    "cors": [],
+                    "ip_restriction": []
+                  }
+                ],
+                "tags": {}
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 0,
+        "destroyed": 0,
+        "drift_changed": 1,
+        "drifted": false,
+        "summary": [],
+        "drift_summary": [
+          {
+            "address": "azurerm_linux_web_app.a",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "site_config[0].application_stack[0].docker_registry_password",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "tags.owner",
+                "before": "a",
+                "after": "b"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "drift/refresh-reorder-keeps-the-secret-masked",
+      "why": "The realistic shape of masking/marked-value-at-another-path: terraform's refresh re-applies the prior marks to the refreshed value by path, so after an out-of-band reorder the mark stays on index 0 on both sides and the secret sits unmarked at index 1 of the after value. It is masked there because it is marked elsewhere in the change.",
+      "plan": {
+        "resource_changes": [],
+        "resource_drift": [
+          {
+            "address": "aws_instance.d",
+            "change": {
+              "actions": [
+                "update"
+              ],
+              "before": {
+                "args": [
+                  "FAKE-SECRET-1",
+                  "x"
+                ]
+              },
+              "after": {
+                "args": [
+                  "x",
+                  "FAKE-SECRET-1"
+                ]
+              },
+              "before_sensitive": {
+                "args": [
+                  true,
+                  false
+                ]
+              },
+              "after_sensitive": {
+                "args": [
+                  true,
+                  false
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "added": 0,
+        "changed": 0,
+        "destroyed": 0,
+        "drift_changed": 1,
+        "drifted": false,
+        "summary": [],
+        "drift_summary": [
+          {
+            "address": "aws_instance.d",
+            "actions": [
+              "update"
+            ],
+            "attrs": [
+              {
+                "name": "args[0]",
+                "before": "(sensitive)",
+                "after": "(sensitive)"
+              },
+              {
+                "name": "args[1]",
                 "before": "(sensitive)",
                 "after": "(sensitive)"
               }

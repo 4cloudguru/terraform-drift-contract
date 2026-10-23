@@ -26,22 +26,61 @@ pin moves — that is a property of the pin, not of a release.
 
 ## What this package guarantees
 
-- **Attribute values are masked from either sensitivity mirror.** `summarize()`
-  emits `attrs[].before` / `attrs[].after` as the literal `"(sensitive)"` when
-  **either** `before_sensitive` or `after_sensitive` marks the key. Masking
-  happens before `fmt()`, so a *marked* secret is never passed to the formatter.
-  Prior to v1.1.0 each side was masked only against its own mirror, so an
-  attribute marked on one side had the other side emitted verbatim — that is the
-  routine shape for a config-derived mark, which terraform applies to the planned
-  value only and never persists to state.
+- **Attribute values are masked from either sensitivity mirror, at every
+  path.** `summarize()` emits one `attrs` row per changed path (a top-level
+  key, or a member of an object or same-length array value under it — see the
+  README) and emits a row's `before` / `after` as the literal `"(sensitive)"`
+  when **either** `before_sensitive` or `after_sensitive` marks that path.
+  Masking happens before `fmt()`, so a *marked* secret is never passed to the
+  formatter. Prior to v1.1.0 each side was masked only against its own mirror,
+  so an attribute marked on one side had the other side emitted verbatim — that
+  is the routine shape for a config-derived mark, which terraform applies to the
+  planned value only and never persists to state.
 
-  This guarantee has **two preconditions**, stated here because stating it
-  unconditionally is itself a finding. It is applied *per top-level changed key*
-  — `isSens()` reads `before_sensitive[k]` / `after_sensitive[k]` and never a
-  nested path, so **a secret nested under an unmarked top-level key is serialised
-  whole** — and it is driven *entirely* by that metadata, so a plan carrying
-  neither mirror gets no masking at all (next section). Neither precondition is
-  a bug to be fixed silently; both are how the mirrors behave too.
+  A **mark** is a truthy scalar in a mirror (terraform writes `true`; any
+  truthy scalar is read as one, which is the fail-closed reading of a mirror
+  that is not terraform's). A row is masked when a mark sits at its path, at
+  any path above it, or anywhere below it, so every value reaches the output
+  inside exactly one row and that row is masked whenever any part of the value
+  is marked. A mark on a block, map or list therefore masks all of it — keys
+  included, since expanding a marked map would put its keys in row names — and a
+  mirror whose shape is not the value's (an array mirror on an object, say)
+  masks the whole value when it holds any mark rather than being skipped by
+  the member-by-member walk.
+
+  **A marked value is masked wherever else it appears in the change.** Marks
+  are aligned by path, and a value can change path between the two sides:
+  terraform's refresh re-applies prior marks to the refreshed value by path, so
+  after an out-of-band reorder of `["S3CR3T","x"]` to `["x","S3CR3T"]` the mark
+  stays on index 0 and the secret sits unmarked at index 1; a key renamed next
+  to a config-derived mark has the same shape. Path masking alone emitted those
+  occurrences in the clear — v1.4.2 masked the whole attribute there — so every
+  value a mirror marks anywhere in the resource change (on either side, by
+  either mirror, in a changed attribute or not) also masks every row that holds
+  it, and a map key that is a marked value is never expanded into a row name.
+  This applies to non-empty strings and numbers. null, booleans and `""` are
+  not treated as secrets (masking every `""` because one marked value was empty
+  would hide real drift), and a value that merely *contains* a marked one is
+  not masked.
+
+  A container with **no** mark in it is not sensitive. Up to v1.4.2 any
+  non-empty mirror container masked the whole top-level key; terraform writes
+  one for every nested block and every list whether or not anything in it is
+  sensitive (an azurerm 4.81.0 `blob_properties` is
+  `[{"container_delete_retention_policy":[{}],"cors_rule":[],"delete_retention_policy":[{}],"restore_policy":[]}]`,
+  a two-CIDR `address_space` is `[false,false]`), so non-secret drift in them
+  rendered `(sensitive) -> (sensitive)`. That was over-masking, not a
+  disclosure, and its fix emits only values whose paths carry no mark.
+
+  This guarantee has **one precondition**, stated here because stating it
+  unconditionally is itself a finding: it is driven *entirely* by that
+  metadata. A secret that neither mirror marks — at its path, or as a value
+  anywhere else in the change — is emitted, at any depth, and a plan carrying
+  neither mirror gets no masking at all (next section). That
+  is not a bug to be fixed silently; it is how the mirrors behave too. (Up to
+  v1.4.2 there was a second one — masking was per top-level key, so a secret
+  under a key whose mirror was `{}` was serialised whole inside that key's
+  value. It still is emitted, now as its own row.)
 
   `drift_summary` (`resource_drift`, optional, additive) is masked by this same
   guarantee, with the same two preconditions — it is produced by the identical
@@ -54,16 +93,32 @@ pin moves — that is a property of the pin, not of a release.
   replaced with `(redacted)@` and every query parameter except `ref` redacted.
 - **Emitted strings are bounded.** Every value that goes through `fmt()` is
   capped at 300 code points, and at most 100 module calls are emitted; an
-  overflow sets `module_calls_truncated: true`.
+  overflow sets `module_calls_truncated: true`. An `attrs` row name is never
+  truncated (it is the row's identity), so expansion stops before a member's
+  name would pass 300 code points, and 16 path segments down; a top-level key
+  name is emitted as-is, as it always was.
 - **The summary itself is bounded, and says when it was.** At most 500 entries
-  and 50 changed attributes per entry, defaulted and caller-overridable;
-  `truncated`, `omitted_entries` and `omitted_attrs` report an overflow. The
+  and 50 `attrs` rows per entry, defaulted and caller-overridable;
+  `truncated`, `omitted_entries` and `omitted_attrs` report an overflow. Every
+  changed top-level key keeps at least one row while there are rows left: a
+  key's expansion leaves one for each changed key after it, so 50 changed keys
+  in a map that sorts first cannot push another attribute's change out of the
+  summary (the adversarial review's first draft of per-path rows let them). The
   **counts are deliberately not capped**, so `drifted` stays truthful when the
   summary does not — a bound that suppressed a count would turn a payload limit
   into a missed detection. Before this, 5000 resources x 50 attrs produced a
   153.6 MiB callback body from a plan authorable on a fork PR. `drift_summary`
   is bounded by the same two numbers (see "What this package does not
   guarantee" for the scope of the `truncated`/`unmasked` markers themselves).
+- **The per-path walk costs no more than v1.4.2.** Each expanded level compares
+  its members again, so the comparison is structural (`sameCanon`): it builds no
+  strings and stops at the first difference, and a property test holds it to
+  the canonical string comparison it replaces. A first draft serialised members
+  at every level and kept the strings: a 256 MiB plan nested 18 deep aborted
+  Node out of memory — uncatchable, before the drift callback fired — where
+  v1.4.2 used 1.07 GB. Measured now on that plan: 946 MB and 220 ms (v1.4.2:
+  1.07 GB and 328 ms); a 1000-resource fleet plan takes 19 ms (20 ms). The
+  mirror and marked-value walks are iterative, so no depth can make them throw.
 - **The serializer cannot be made to throw.** `stableStringify` is iterative. The
   recursive form threw `RangeError` at ~2,600 levels of nesting, out of
   `summarize()` and into the consumer's CI step — before the drift callback
@@ -159,9 +214,12 @@ Both divergences this document previously tracked as open are **closed**.
   attribute when either mirror marks it; the Go `driftingest` (`changedAttrs` /
   `maskOrFmt`) takes the same union as of
   [`terraform-state-manager-backend#374`](https://github.com/sethbacon/terraform-state-manager-backend/pull/374),
-  verified byte-identical to this package across the sensitivity vectors. This
-  axis does not exist in the jq path at all: the dispatched `SUMMARY` emits only
-  `{address, actions}` and no `attrs`, so it has no attribute values to mask.
+  verified byte-identical to this package across the sensitivity vectors. Since
+  v1.5.0 the union applies per path and a mark is a truthy scalar; the Go
+  `driftingest` (`walkAttr`) takes the same rules in the same batch, pinned by
+  the `attrs/*` and `masking/*` vectors. This axis does not exist in the jq
+  path at all: the dispatched `SUMMARY` emits only `{address, actions}` and no
+  `attrs`, so it has no attribute values to mask.
 - **The `module_calls` axis is reconciled.** Both dispatched jq templates now
   project each call to `source` (credentials scrubbed) + `version_constraint`,
   capped and bounded exactly as `moduleCallsPlan()` does, verified byte-identical
@@ -219,6 +277,26 @@ a value being emitted less masked than it is here:
    finding 43 below).
    Corpus: `shape/non-string-address`, `shape/resource-changes-not-an-array`,
    `shape/actions-not-an-array`.
+
+One more, found by the adversarial review of v1.5.0. It is pre-existing, it is
+**not** stated in the corpus, and unlike the two above it **can** change which
+values are masked — but only for a document terraform cannot write:
+
+3. **Go decodes some hand-built documents differently.** `encoding/json` matches
+   struct field names case-insensitively, so a document carrying both
+   `before_sensitive` and a later `BEFORE_SENSITIVE` (or `before_ſensitive`, by
+   Unicode folding, or a second `change`) has Go read the other one; and it
+   replaces invalid UTF-8 and lone surrogates in keys with U+FFFD, so two keys
+   this package keeps apart collide in Go. Either can mask a value in one
+   implementation and not the other, in either direction. Terraform writes each
+   field once, in lower case, and only valid UTF-8, so a real plan never takes
+   either path; a hand-built plan can simply omit the mirrors instead. Numbers
+   past float64's range are the related case that was fixed: a mirror holding
+   one used to fail to decode in Go and mask nothing, and Go now reads it as a
+   mark exactly as this package reads JSON.parse's `Infinity`. In attribute
+   values such numbers still differ (`Infinity` serialises as `null` here, and
+   Go cannot decode the value at all), which changes rows but masks nothing
+   less.
 
 ### Known residuals that need a spec change, not a one-sided edit
 
