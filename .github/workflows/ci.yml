@@ -26,7 +26,7 @@ jobs:
       #   so no endpoint baseline exists and a block policy written without one fails
       #   closed on its first run; audit is what produces that list
       - name: Harden the runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       # SHA-pinned with a trailing version comment: a tag is mutable, so `@v4`
@@ -164,7 +164,7 @@ jobs:
       #   harden-runner has never run in this repository, so no endpoint baseline
       #   exists and a block policy written without one fails closed on its first run;
       #   audit is what produces that list
-      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -197,7 +197,7 @@ jobs:
       #   harden-runner has never run in this repository, so no endpoint baseline
       #   exists and a block policy written without one fails closed on its first run;
       #   audit is what produces that list
-      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -232,6 +232,6 @@ jobs:
   # shared-workflows at that commit, so this repo cannot weaken its own gate by
   # editing a local copy -- there is no local copy.
   workflow-hardening:
-    uses: 4cloudguru/shared-workflows/.github/workflows/workflow-hardening.yml@a1fdc796956444af6c184c0784e1b033637888e9 # v1.29.3
+    uses: 4cloudguru/shared-workflows/.github/workflows/workflow-hardening.yml@51b396a2f7035e9358ebbd942425cc31bb9b81c9 # v1.30.0
     with:
       script-ref: a1fdc796956444af6c184c0784e1b033637888e9
